@@ -1,0 +1,8 @@
+,Data,Model,MSE,MAE,MAPE
+0,ada,Transformer_sentiment,8.9609544e-05,0.0059270123,0.028767103
+1,btc,Transformer_sentiment,0.0016560724,0.013554433,0.15409909
+2,doge,Transformer_sentiment,7.129355e-05,0.005782395,0.37826747
+3,eth,Transformer_sentiment,0.00015451989,0.008439702,0.32741186
+4,xmr,Transformer_sentiment,0.00016586395,0.009335187,0.3702434
+5,xrp,Transformer_sentiment,0.0003423051,0.013617454,0.5102287
+6,aave,Transformer_sentiment,0.2489337,0.48307824,0.6933124

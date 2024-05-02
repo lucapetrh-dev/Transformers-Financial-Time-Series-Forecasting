@@ -295,9 +295,50 @@ def simplify_df(df):
     - df_simplified: pandas DataFrame with only specified columns retained.
     """
     # List of columns to keep
-    columns_to_keep = ['timestamp', 'time', 'open', 'close', 'high', 'low', 'volume_24h', 'circulating_supply', 'day', 'month', 'year']
+    columns_to_keep = ['timestamp', 'time', 'open', 'close', 'high', 'low', 'market_cap', 'day', 'month', 'year']
 
     # Select only the specified columns
     df_simplified = df[columns_to_keep].copy()
 
     return df_simplified
+
+def apply_functions(train, test, val):
+
+    train = trigonometric_date_encoding(train)
+    val = trigonometric_date_encoding(val)
+    test = trigonometric_date_encoding(test)
+
+    excluded_columns = ["sin_date", "cos_date", "Month_Category_Bearish", "Month_Category_Bullish", "Month_Category_Normal"]
+    features_to_standardize = [column for column in train.columns if column not in excluded_columns]
+
+    # Calculate the mean and standard deviation only for the required columns
+    train_mean = train[features_to_standardize].mean()
+    train_std = train[features_to_standardize].std()
+
+    # Standardize only the required columns in the train, validation, and test sets
+    train[features_to_standardize] = (train[features_to_standardize] - train_mean) / train_std
+    val[features_to_standardize] = (val[features_to_standardize] - train_mean) / train_std
+    test[features_to_standardize] = (test[features_to_standardize] - train_mean) / train_std
+
+    X_train, y_train = create_sequences(train, 5)
+    X_val, y_val = create_sequences(val, 5)
+    X_test, y_test = create_sequences(test, 5)
+
+    # Convert the numpy arrays to float32
+    X_train, y_train, X_val, y_val, X_test, y_test = map(
+        lambda x: x.astype('float32'),
+        [X_train, y_train, X_val, y_val, X_test, y_test]
+    )
+
+    return X_train, y_train, X_val, y_val, X_test, y_test
+
+def preprocess(path):
+
+    df = load_csv(path)
+    df = split_date(df, 'time')
+    df = drop_columns(df, 25.0)
+    df = impute_rolling_median(df, 5)
+    df = add_seasonality(df)
+    df = apply_moving_average_for_roc(df, 'ema', 10, 20)
+    df = df.ffill()
+    return df
