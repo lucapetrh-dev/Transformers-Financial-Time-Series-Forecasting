@@ -186,9 +186,9 @@ def create_lags(df, n_lags):
 
 def add_seasonality(df):
     def categorize_month(month):
-        if month in [11, 12, 1, 2, 4, 5, 8]:
+        if month in [1, 2, 3, 4]:
             return "Bullish"
-        elif month in [3, 6, 7, 10]:
+        elif month in [6, 7, 9, 10]:
             return "Bearish"
         else:
             return "Normal"
