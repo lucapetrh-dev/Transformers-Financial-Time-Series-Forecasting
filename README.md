@@ -1,92 +1,292 @@
 # Transformers for Financial Time Series Forecasting in Cryptocurrency Markets
 
-This Master Thesis project explores the application of Transformer models for financial time series forecasting, with a focus on cryptocurrency markets. The goal is to evaluate the effectiveness of Transformers in capturing complex patterns in highly volatile cryptocurrency price movements. In addition, Transformer models are compared against traditional time series models such as Long Short-Term Memory (LSTM) networks and LSTM-Convolutional Neural Network (LSTM-CNN) hybrids.
+This repository now runs the thesis pipeline with leakage-aware return forecasting, paired sentiment evaluation, modern model baselines, multi-foundation zero-shot benchmarking, canonical transformer/HPO tooling, and paper-ready artifacts.
 
-A significant feature of this research is the integration of sentiment analysis into the forecasting models. The idea is to assess how sentiment analysis metrics (e.g., social media activity and tweet volumes) impact the predictive accuracy of cryptocurrency price forecasts.
+## Current Repository Layout
 
-## Methodology
-
-1. **Data Collection and Preprocessing**  
-   Gather financial and sentiment data, followed by preprocessing steps for feature engineering and model input preparation.
-
-2. **Feature Engineering**  
-   Extract and transform raw financial and sentiment data into model-friendly features.
-
-3. **Model Development**  
-   Develop and implement the following models:
-   - LSTM
-   - LSTM-CNN
-   - Transformer
-
-4. **Parallel Experiments**  
-   Conduct experiments using:
-   - Financial data only
-   - Financial data combined with sentiment analysis features
-
-5. **Model Validation on Bitcoin (BTC)**  
-   Validate the models by testing on Bitcoin (BTC) data.
-
-6. **Application to Other Cryptocurrencies**  
-   Apply the models to additional cryptocurrencies including AAVE, ADA, DOGE, ETH, XMR, and XRP.
-
-7. **Transfer Learning Implementation**  
-   Explore transfer learning techniques to improve model generalization across different cryptocurrencies.
-
-## Key Findings
-
-- **Transformer models** incorporating sentiment analysis tend to outperform models based solely on financial data features.
-- **Sentiment data augmentation** does not significantly improve the performance of LSTM or LSTM-CNN models.
-- These findings can help develop more accurate forecasting tools in speculative financial markets such as cryptocurrencies.
-
-## Repository Structure
-
-```
-├── data/                            # Raw financial time series data
-│
-├── models/                          # Model implementations and experiments
-│   ├── scripts/                     # Utility scripts
-│   │   └── utils.py                 # Script with helper functions
-│   ├── sentiment_scores/            # Models using sentiment data
-│   │   ├── LSTM_CNN_sentiment.ipynb # LSTM-CNN model with sentiment data
-│   │   ├── LSTM_sentiment.ipynb     # LSTM model with sentiment data
-│   │   └── Transformer_sentiment.ipynb # Transformer model with sentiment data
-│   ├── ARIMA.ipynb                  # ARIMA model experiment
-│   ├── LSTM_CNN.ipynb               # LSTM-CNN hybrid model
-│   ├── LSTM.ipynb                   # LSTM model
-│   ├── run_all_sentiment.ipynb      # Run all models with sentiment data
-│   └── run_all.ipynb                # Run all models with financial data only
-│   └── Transformer.ipynb            # Transformer model experiment
-│
-├── results/                         # Results from model experiments
-│
-├── feature_engineering.ipynb        # Notebook for feature engineering
-├── moving_average.ipynb             # Moving average calculations and tests
-├── preprocessing.ipynb              # Data preprocessing and cleaning
-└── stationarity.ipynb               # Stationarity tests and analysis
+```text
+forecast/
+  analysis/     appendix diagnostics (stationarity/FFT/ACF/PACF)
+  config/       frozen experiment contract
+  pipeline/     reusable modules (features, splits, metrics, models)
+  runners/      executable experiment scripts
+tests/          real-data regression tests
+.data/          source datasets (hourly crypto CSVs)
+results/        generated outputs
+.docs/          manuscript plans and notes
+.legacy/        archived old notebooks/files (gitignored)
 ```
 
-## Usage
+## Environment
 
-Run and compare results across different models:
-   - Use `run_all.ipynb` for financial data-only experiments.
-   - Use `run_all_sentiment.ipynb` for financial + sentiment data experiments.
+Python 3.10+ recommended.
 
-## Results
+Install core dependencies:
 
-Detailed results, analysis, and performance metrics can be found within the respective notebook files. Key comparisons between the different models are summarized in the results section of each notebook.
+```bash
+pip install numpy pandas scipy scikit-learn torch matplotlib seaborn
+```
 
-### Comparison of Final Results
+Install optional packages used by some runners:
 
-The following table compares the final results of all the model combinations, focusing on the MAE metric across different cryptocurrencies. The baseline model, predicting prices of tomorrow using today's price, is used for benchmarking purposes.
+```bash
+pip install statsmodels xgboost chronos-forecasting
+```
 
-| **Model**               | **ADA**   | **BTC**      | **DOGE**  | **ETH**   | **XMR**    | **XRP**   | **AAVE**  |
-|-------------------------|-----------|--------------|-----------|-----------|------------|-----------|-----------|
-| **Baseline**             | 0.004711  | 121.214873   | 0.000804  | 8.774213  | 1.039195   | 0.003622  | 17.229896 |
-| **LSTM**                 | 0.121723  | 0.058811     | 0.023134  | 0.039746  | 0.018086   | 0.018221  | 0.540885  |
-| **LSTM-CNN**             | 0.081877  | 0.044432     | 0.050316  | 0.039123  | 0.046871   | 0.026126  | 0.442550  |
-| **Transformer**          | 0.581803  | 0.016008     | 0.023030  | 0.090027  | 0.016065   | 0.017376  | 0.102130  |
-| **LSTM-Sentiment**       | 0.050398  | 0.052252     | 0.013051  | 0.034302  | 0.012693   | 0.022688  | 0.470003  |
-| **LSTM-CNN-Sentiment**   | 0.121398  | 0.072749     | 0.056103  | 0.066412  | 0.186515   | 0.102465  | 0.219814  |
-| **Transformer-Sentiment**| **0.005927** | **0.013554**  | **0.005782** | **0.008844** | **0.009335** | **0.013617** | **0.483078** |
+Install native multi-foundation backends (TimesFM, Moirai, Lag-Llama):
 
-**Transformer-Sentiment** outperforms other models across almost all cryptocurrencies, achieving the lowest MAE values.
+```bash
+pip install "timesfm[torch]" uni2ts gluonts lightning
+pip install "git+https://github.com/time-series-foundation-models/lag-llama.git"
+pip install "huggingface_hub<1.0"
+```
+
+## Data Requirements
+
+All runners expect CSV files with:
+
+- timestamp column (default: `time`)
+- price column (one of: `adjusted_close`, `adj_close`, `Adj Close`, `adjclose`, `close`)
+
+Main dataset used in this repo:
+
+- `.data/hourly/ada_lunarcrush_timeseries_hourly.csv`
+- `.data/hourly/btc_lunarcrush_timeseries_hourly.csv`
+- `.data/hourly/doge_lunarcrush_timeseries_hourly.csv`
+- `.data/hourly/eth_lunarcrush_timeseries_hourly.csv`
+- `.data/hourly/xmr_lunarcrush_timeseries_hourly.csv`
+- `.data/hourly/xrp_lunarcrush_timeseries_hourly.csv`
+
+Paper benchmark active asset universe:
+
+- `btc,eth,ada,doge,xmr,xrp`
+
+## Frozen Experiment Contract
+
+- target: `target_ret_{1,5,20}d` (log-return space)
+- split protocol: walk-forward for main benchmark, purged/CPCV for ablations
+- sentiment handling: causal lag + coverage filter + causal `ffill` then zero-fill
+- comparability: same target space across all multi-asset tables
+- reproducibility artifacts generated for each run
+
+## Run Order (Paper Pipeline)
+
+### 0) Validate contract + data manifest
+
+```bash
+python forecast/runners/run_data_manifest.py \
+  --data-glob '.data/hourly/*_timeseries_hourly.csv' \
+  --include-assets btc,eth,ada,doge,xmr,xrp \
+  --provenance-config forecast/config/data_provenance.json \
+  --output results/paper/data_manifest.csv
+
+python forecast/runners/run_contract_audit.py \
+  --contract-path forecast/config/paper_experiment.json \
+  --manifest-path results/paper/data_manifest.csv \
+  --require-provenance \
+  --output results/paper/contract_asset_manifest.csv
+```
+
+### 1) Multi-asset baselines (paired no-sent vs sentiment)
+
+```bash
+python forecast/runners/run_multi_asset_baselines.py \
+  --data-glob '.data/hourly/*_timeseries_hourly.csv' \
+  --include-assets btc,eth,ada,doge,xmr,xrp \
+  --horizon 1 \
+  --min-train-size 300 \
+  --test-size 60 \
+  --step-size 240 \
+  --auto-adjust-splits \
+  --skip-failed-assets \
+  --run-paired-sentiment \
+  --no-arima \
+  --no-xgboost \
+  --output results/paper/multi_asset_baselines_h1_paired_summary.csv
+```
+
+### 2) Multi-asset transformer family (paired)
+
+```bash
+python forecast/runners/run_multi_asset_transformers.py \
+  --data-glob '.data/hourly/*_timeseries_hourly.csv' \
+  --include-assets btc,eth,ada,doge,xmr,xrp \
+  --horizon 1 \
+  --lookback 64 \
+  --min-train-size 300 \
+  --test-size 60 \
+  --step-size 240 \
+  --epochs 2 \
+  --models patchtst_like,itransformer_like \
+  --objective-track both \
+  --point-loss mse \
+  --probabilistic-mode quantile \
+  --quantiles 0.1,0.5,0.9 \
+  --auto-adjust-splits \
+  --skip-failed-assets \
+  --run-paired-sentiment \
+  --output results/paper/multi_asset_transformers_h1_paired_summary.csv
+```
+
+### 3) Multi-foundation zero-shot (Chronos-2, TimesFM, Moirai, Lag-Llama)
+
+```bash
+python forecast/runners/run_multi_asset_foundation.py \
+  --data-glob '.data/hourly/*_timeseries_hourly.csv' \
+  --include-assets btc,eth,ada,doge,xmr,xrp \
+  --horizon 1 \
+  --context-length 64 \
+  --min-train-size 300 \
+  --test-size 60 \
+  --step-size 240 \
+  --models chronos2,timesfm,moirai,lagllama \
+  --disable-fallback-adapters \
+  --auto-adjust-splits \
+  --skip-failed-assets \
+  --output results/paper/multi_asset_foundation_h1_summary.csv
+```
+
+Note: the first native run downloads large checkpoints from HuggingFace and can take significant time.
+
+Compatibility wrapper (Chronos-only) is still available:
+
+```bash
+python forecast/runners/run_multi_asset_chronos2.py \
+  --data-glob '.data/hourly/*_timeseries_hourly.csv' \
+  --include-assets btc,eth,ada,doge,xmr,xrp \
+  --output results/paper/multi_asset_chronos2_h1_summary.csv
+```
+
+### 4) Feature ablations (financial / +sentiment / +regime)
+
+```bash
+python forecast/runners/run_feature_ablations.py \
+  --data-glob '.data/hourly/*_timeseries_hourly.csv' \
+  --include-assets btc,eth,ada,doge,xmr,xrp \
+  --horizon 1 \
+  --n-splits 5 \
+  --embargo 5 \
+  --label-horizon 1 \
+  --sentiment-lag 1 \
+  --regime-lookbacks 20,60 \
+  --no-arima \
+  --no-xgboost \
+  --skip-failed-assets \
+  --output results/paper/feature_ablation_h1_summary.csv
+```
+
+### 5) Cross-asset transfer (BTC -> ETH)
+
+```bash
+python forecast/runners/run_cross_asset_transfer.py \
+  --source-data-path .data/hourly/btc_lunarcrush_timeseries_hourly.csv \
+  --target-data-path .data/hourly/eth_lunarcrush_timeseries_hourly.csv \
+  --horizon 1 \
+  --lookback 64 \
+  --model patchtst_like \
+  --epochs 2 \
+  --finetune-epochs 1 \
+  --use-sentiment \
+  --sentiment-lag 1 \
+  --sentiment-min-non-null-ratio 0.2 \
+  --output results/paper/transfer_btc_eth_patchtst_with_sent.csv
+```
+
+### 6) Appendix diagnostics (run for each asset)
+
+```bash
+for f in \
+  .data/hourly/btc_lunarcrush_timeseries_hourly.csv \
+  .data/hourly/eth_lunarcrush_timeseries_hourly.csv \
+  .data/hourly/ada_lunarcrush_timeseries_hourly.csv \
+  .data/hourly/doge_lunarcrush_timeseries_hourly.csv \
+  .data/hourly/xmr_lunarcrush_timeseries_hourly.csv \
+  .data/hourly/xrp_lunarcrush_timeseries_hourly.csv; do
+  python forecast/runners/run_stationarity_appendix.py \
+    --data-path "$f" \
+    --time-col time \
+    --output-dir results/paper/appendix/stationarity
+done
+```
+
+### 7) Reproducibility audit
+
+```bash
+python forecast/runners/run_reproducibility_audit.py \
+  --results-root results/paper \
+  --output-dir results/paper/reproducibility
+```
+
+### 8) Canonical transformer HPO (Optuna)
+
+```bash
+python forecast/runners/run_transformer_hpo.py \
+  --data-glob '.data/hourly/*_timeseries_hourly.csv' \
+  --include-assets btc,eth,ada,doge,xmr,xrp \
+  --model-family itransformer \
+  --objective-track point \
+  --point-loss mse \
+  --trials 50 \
+  --output-dir results/paper/hpo \
+  --summary-output results/paper/hpo/transformer_hpo_best_summary.csv
+```
+
+### 9) Ensemble benchmark (ridge + best foundation)
+
+```bash
+python forecast/runners/run_ensemble_benchmark.py \
+  --results-root results/paper \
+  --horizon 1 \
+  --output results/paper/ensemble_h1_summary.csv
+```
+
+### 10) Statistical inference (bootstrap CI, binomial, MCS)
+
+```bash
+python forecast/runners/run_statistical_inference.py \
+  --results-root results/paper \
+  --horizon 1 \
+  --output-prefix PAPER_H1
+```
+
+### 11) Generate paper-ready consolidated tables
+
+```bash
+python forecast/runners/run_paper_summary.py \
+  --results-root results/paper \
+  --horizon 1 \
+  --output-prefix PAPER_H1
+```
+
+## Where To Read Results
+
+Main files for manuscript writing:
+
+- `results/paper/PAPER_H1_RESULTS_SUMMARY.md`
+- `results/paper/PAPER_H1_best_by_asset.csv`
+- `results/paper/PAPER_H1_best_by_asset_mode.csv`
+- `results/paper/PAPER_H1_family_performance.csv`
+- `results/paper/PAPER_H1_sentiment_delta.csv`
+- `results/paper/PAPER_H1_ablation_mode_wins.csv`
+- `results/paper/PAPER_H1_metric_ci95.csv`
+- `results/paper/PAPER_H1_directional_binomial.csv`
+- `results/paper/PAPER_H1_mcs.csv`
+
+Core experiment outputs:
+
+- `results/paper/multi_asset_baselines_h1_paired_summary.csv`
+- `results/paper/multi_asset_transformers_h1_paired_summary.csv`
+- `results/paper/multi_asset_foundation_h1_summary.csv`
+- `results/paper/multi_asset_chronos2_h1_summary.csv` (compatibility output)
+- `results/paper/ensemble_h1_summary.csv`
+- `results/paper/feature_ablation_h1_summary.csv`
+- `results/paper/transfer_btc_eth_patchtst_with_sent.csv`
+- `results/paper/reproducibility/reproducibility_summary.json`
+
+## Tests
+
+Run full real-data regression tests:
+
+```bash
+pytest -q tests
+```

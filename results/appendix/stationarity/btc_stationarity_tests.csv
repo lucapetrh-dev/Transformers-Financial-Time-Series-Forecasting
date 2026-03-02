@@ -1,0 +1,7 @@
+asset,series,test,statistic,p_value,stationary_at_5pct,null_hypothesis
+btc,log_price,adf,-1.2247980915452426,0.6628382784585327,False,unit_root_non_stationary
+btc,log_price,kpss,2.494084270087961,0.01,False,trend_stationary
+btc,return_1d,adf,-18.951985431850407,0.0,True,unit_root_non_stationary
+btc,return_1d,kpss,0.15051334077590495,0.1,True,trend_stationary
+btc,target_ret_1d,adf,-18.960236650205523,0.0,True,unit_root_non_stationary
+btc,target_ret_1d,kpss,0.14997910056443586,0.1,True,trend_stationary

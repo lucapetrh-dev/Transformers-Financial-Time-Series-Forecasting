@@ -160,7 +160,11 @@ cython_debug/
 .idea/
 
 .DS_Store
-data/
+.data/
+.docs/
+.legacy/
+paper/
+reproducibility/
 
 
 amz_test.png

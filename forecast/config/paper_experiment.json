@@ -1,0 +1,38 @@
+{
+  "version": "2026-03-02",
+  "experiment_name": "crypto_return_forecasting_paper_h1",
+  "target_space": "log_return",
+  "target_horizons_days": [1, 5, 20],
+  "feature_modes": [
+    "financial_only",
+    "financial_plus_sentiment",
+    "financial_plus_sentiment_plus_regime"
+  ],
+  "sentiment_lag": 1,
+  "assets": [
+    {
+      "asset": "btc",
+      "data_path": ".data/hourly/btc_lunarcrush_timeseries_hourly.csv"
+    },
+    {
+      "asset": "eth",
+      "data_path": ".data/hourly/eth_lunarcrush_timeseries_hourly.csv"
+    },
+    {
+      "asset": "ada",
+      "data_path": ".data/hourly/ada_lunarcrush_timeseries_hourly.csv"
+    },
+    {
+      "asset": "doge",
+      "data_path": ".data/hourly/doge_lunarcrush_timeseries_hourly.csv"
+    },
+    {
+      "asset": "xmr",
+      "data_path": ".data/hourly/xmr_lunarcrush_timeseries_hourly.csv"
+    },
+    {
+      "asset": "xrp",
+      "data_path": ".data/hourly/xrp_lunarcrush_timeseries_hourly.csv"
+    }
+  ]
+}

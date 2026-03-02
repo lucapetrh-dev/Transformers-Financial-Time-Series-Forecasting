@@ -1,0 +1,16 @@
+{
+  "default": {
+    "source_provider": "LunarCrush",
+    "provider_timezone": "UTC",
+    "daily_cutoff_time": "00:00:00",
+    "snapshot_date": "2026-03-02"
+  },
+  "assets": {
+    "btc": {},
+    "eth": {},
+    "ada": {},
+    "doge": {},
+    "xmr": {},
+    "xrp": {}
+  }
+}
