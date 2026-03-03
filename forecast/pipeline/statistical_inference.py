@@ -63,7 +63,9 @@ def exact_binomial_directional_test(y_true: np.ndarray, y_pred: np.ndarray, p_nu
         raise ValueError("y_true and y_pred must have matching length")
     if len(y_true) == 0:
         return {"n_obs": 0.0, "n_success": 0.0, "hit_rate": np.nan, "p_value": np.nan}
-    success = int(np.sum(np.sign(y_true) == np.sign(y_pred)))
+    true_dir = np.where(y_true >= 0.0, 1, -1)
+    pred_dir = np.where(y_pred >= 0.0, 1, -1)
+    success = int(np.sum(true_dir == pred_dir))
     n = int(len(y_true))
     hit_rate = float(success / n)
     p_value = float(binomtest(success, n=n, p=p_null, alternative="two-sided").pvalue)

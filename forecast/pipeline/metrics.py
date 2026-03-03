@@ -15,7 +15,9 @@ def rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
 
 def directional_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    return float(np.mean(np.sign(y_true) == np.sign(y_pred)))
+    true_dir = np.where(y_true >= 0.0, 1, -1)
+    pred_dir = np.where(y_pred >= 0.0, 1, -1)
+    return float(np.mean(true_dir == pred_dir))
 
 
 def pinball_loss(y_true: np.ndarray, y_pred_q: np.ndarray, q: float) -> float:

@@ -16,6 +16,16 @@ class RandomWalkReturnBaseline:
         return X[:, 0]
 
 
+class ZeroForecastBaseline:
+    """Trivial baseline: always predict zero return."""
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        return self
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        return np.zeros(len(X), dtype=np.float32)
+
+
 class LinearLagBaseline:
     def __init__(self, alpha: float = 1.0):
         self.scaler = StandardScaler()

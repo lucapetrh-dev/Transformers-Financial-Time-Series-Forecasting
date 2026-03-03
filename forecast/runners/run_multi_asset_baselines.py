@@ -55,6 +55,8 @@ def _build_runner_cmd(
         str(args.sentiment_min_non_null_ratio),
         "--regime-lookbacks",
         args.regime_lookbacks,
+        "--models",
+        args.models,
         "--output",
         str(output_path),
     ]
@@ -185,6 +187,15 @@ def main() -> None:
     parser.add_argument("--run-paired-sentiment", action="store_true")
     parser.add_argument("--no-arima", action="store_true")
     parser.add_argument("--no-xgboost", action="store_true")
+    parser.add_argument(
+        "--models",
+        type=str,
+        default="random_walk,zero_forecast,linear_ridge,xgboost,arima_101",
+        help=(
+            "Comma-separated baseline model subset passed to run_baselines.py. "
+            "Allowed: random_walk,zero_forecast,linear_ridge,xgboost,arima_101"
+        ),
+    )
     parser.add_argument("--tune-linear-alpha", action="store_true")
     parser.add_argument("--alpha-grid", type=str, default="0.01,0.1,1.0,10.0")
     parser.add_argument("--cv-splits", type=int, default=5)

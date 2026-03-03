@@ -96,12 +96,11 @@ python forecast/runners/run_multi_asset_baselines.py \
   --horizon 1 \
   --min-train-size 300 \
   --test-size 60 \
-  --step-size 240 \
+  --step-size 120 \
   --auto-adjust-splits \
   --skip-failed-assets \
   --run-paired-sentiment \
   --no-arima \
-  --no-xgboost \
   --output results/paper/multi_asset_baselines_h1_paired_summary.csv
 ```
 
@@ -115,8 +114,8 @@ python forecast/runners/run_multi_asset_transformers.py \
   --lookback 64 \
   --min-train-size 300 \
   --test-size 60 \
-  --step-size 240 \
-  --epochs 2 \
+  --step-size 120 \
+  --epochs 20 \
   --models patchtst_like,itransformer_like \
   --objective-track both \
   --point-loss mse \
@@ -125,6 +124,7 @@ python forecast/runners/run_multi_asset_transformers.py \
   --auto-adjust-splits \
   --skip-failed-assets \
   --run-paired-sentiment \
+  --save-history \
   --output results/paper/multi_asset_transformers_h1_paired_summary.csv
 ```
 
@@ -138,11 +138,11 @@ python forecast/runners/run_multi_asset_foundation.py \
   --context-length 64 \
   --min-train-size 300 \
   --test-size 60 \
-  --step-size 240 \
+  --step-size 120 \
   --models chronos2,timesfm,moirai,lagllama \
-  --disable-fallback-adapters \
+  --paper-strict \
   --auto-adjust-splits \
-  --skip-failed-assets \
+  --save-predictions \
   --output results/paper/multi_asset_foundation_h1_summary.csv
 ```
 
@@ -184,8 +184,8 @@ python forecast/runners/run_cross_asset_transfer.py \
   --horizon 1 \
   --lookback 64 \
   --model patchtst_like \
-  --epochs 2 \
-  --finetune-epochs 1 \
+  --epochs 20 \
+  --finetune-epochs 5 \
   --use-sentiment \
   --sentiment-lag 1 \
   --sentiment-min-non-null-ratio 0.2 \

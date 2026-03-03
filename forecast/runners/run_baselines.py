@@ -13,6 +13,7 @@ if __package__ in (None, ""):
 from forecast.pipeline.baselines import (
     LinearLagBaseline,
     RandomWalkReturnBaseline,
+    ZeroForecastBaseline,
     XGBoostLagBaseline,
     has_xgboost,
     try_arima_forecast,
@@ -50,6 +51,19 @@ from forecast.pipeline.tuning import PurgedCVConfig, tune_ridge_alpha_purged_cv
 
 def _parse_int_tuple(value: str) -> tuple[int, ...]:
     return tuple(int(v.strip()) for v in value.split(",") if v.strip())
+
+
+BASELINE_MODEL_CHOICES = ("random_walk", "zero_forecast", "linear_ridge", "xgboost", "arima_101")
+
+
+def _parse_model_list(value: str) -> list[str]:
+    models = [m.strip().lower() for m in value.split(",") if m.strip()]
+    if not models:
+        raise ValueError("No baseline models specified via --models")
+    unknown = sorted(set(models).difference(BASELINE_MODEL_CHOICES))
+    if unknown:
+        raise ValueError(f"Unknown baseline models in --models: {unknown}")
+    return models
 
 
 def _infer_asset_label(path: str | Path) -> str:
@@ -204,6 +218,15 @@ def main() -> None:
         action="store_true",
         help="Export standardized per-fold prediction and quantile traces for downstream figure generation",
     )
+    parser.add_argument(
+        "--models",
+        type=str,
+        default="random_walk,zero_forecast,linear_ridge,xgboost,arima_101",
+        help=(
+            "Comma-separated model subset. Allowed: "
+            "random_walk,zero_forecast,linear_ridge,xgboost,arima_101"
+        ),
+    )
     parser.add_argument("--output", type=str, default="results/baselines_summary.csv")
     args = parser.parse_args()
 
@@ -296,8 +319,13 @@ def _run_single(args, use_sentiment: bool, output_path: Path) -> None:
     prediction_rows: list[dict[str, float | str | int]] = []
     quantile_rows: list[dict[str, float | str | int]] = []
     alpha_grid = [float(v.strip()) for v in args.alpha_grid.split(",") if v.strip()]
-    use_xgboost = has_xgboost() and (not args.no_xgboost)
-    n_trials = 4 if use_xgboost else 3
+    requested_models = _parse_model_list(args.models)
+    use_random_walk = "random_walk" in requested_models
+    use_zero_forecast = "zero_forecast" in requested_models
+    use_linear_ridge = "linear_ridge" in requested_models
+    use_xgboost = ("xgboost" in requested_models) and has_xgboost() and (not args.no_xgboost)
+    use_arima = ("arima_101" in requested_models) and (not args.no_arima)
+    n_trials = max(1, int(use_random_walk) + int(use_zero_forecast) + int(use_linear_ridge) + int(use_xgboost) + int(use_arima))
 
     for fold, (train_idx, test_idx) in enumerate(
         walk_forward_splits(
@@ -322,7 +350,7 @@ def _run_single(args, use_sentiment: bool, output_path: Path) -> None:
         )
 
         linear_alpha = 1.0
-        if args.tune_linear_alpha:
+        if args.tune_linear_alpha and use_linear_ridge:
             linear_alpha, cv_df = tune_ridge_alpha_purged_cv(
                 X_train,
                 y_train,
@@ -338,51 +366,76 @@ def _run_single(args, use_sentiment: bool, output_path: Path) -> None:
             cv_df["walk_forward_fold"] = fold
             all_cv_rows.append(cv_df)
 
-        rw = RandomWalkReturnBaseline().fit(X_train, y_train)
-        lr = LinearLagBaseline(alpha=linear_alpha).fit(X_train, y_train)
+        if use_random_walk:
+            rw = RandomWalkReturnBaseline().fit(X_train, y_train)
+            pred_rw = rw.predict(X_test)
+            train_resid_std_rw = float(np.std(y_train - rw.predict(X_train), ddof=1)) if len(y_train) > 1 else 1e-6
+            rw_metrics = evaluate_model(y_test, pred_rw, train_resid_std_rw, n_trials=n_trials)
+            all_rows.append({"fold": fold, "model": "random_walk", "linear_alpha": np.nan, **rw_metrics})
+            all_preds_rw.extend(pred_rw.tolist())
+            if args.save_predictions:
+                rw_q10, rw_q90 = _gaussian_q10_q90(pred_rw, train_resid_std_rw)
+                _append_prediction_records(
+                    prediction_rows,
+                    quantile_rows,
+                    timestamps=ts_test,
+                    y_true=y_test,
+                    y_pred=pred_rw,
+                    q10=rw_q10,
+                    q50=pred_rw,
+                    q90=rw_q90,
+                    fold=fold,
+                    model="random_walk",
+                    mode=mode_name,
+                    asset=asset_label,
+                )
 
-        pred_rw = rw.predict(X_test)
-        pred_lr = lr.predict(X_test)
+        if use_zero_forecast:
+            zero = ZeroForecastBaseline().fit(X_train, y_train)
+            pred_zero = zero.predict(X_test)
+            train_resid_std_zero = float(np.std(y_train - zero.predict(X_train), ddof=1)) if len(y_train) > 1 else 1e-6
+            zero_metrics = evaluate_model(y_test, pred_zero, train_resid_std_zero, n_trials=n_trials)
+            all_rows.append({"fold": fold, "model": "zero_forecast", "linear_alpha": np.nan, **zero_metrics})
+            if args.save_predictions:
+                zero_q10, zero_q90 = _gaussian_q10_q90(pred_zero, train_resid_std_zero)
+                _append_prediction_records(
+                    prediction_rows,
+                    quantile_rows,
+                    timestamps=ts_test,
+                    y_true=y_test,
+                    y_pred=pred_zero,
+                    q10=zero_q10,
+                    q50=pred_zero,
+                    q90=zero_q90,
+                    fold=fold,
+                    model="zero_forecast",
+                    mode=mode_name,
+                    asset=asset_label,
+                )
 
-        train_resid_std_rw = float(np.std(y_train - rw.predict(X_train), ddof=1)) if len(y_train) > 1 else 1e-6
-        train_resid_std_lr = float(np.std(y_train - lr.predict(X_train), ddof=1)) if len(y_train) > 1 else 1e-6
-
-        rw_metrics = evaluate_model(y_test, pred_rw, train_resid_std_rw, n_trials=n_trials)
-        lr_metrics = evaluate_model(y_test, pred_lr, train_resid_std_lr, n_trials=n_trials)
-
-        all_rows.append({"fold": fold, "model": "random_walk", "linear_alpha": np.nan, **rw_metrics})
-        all_rows.append({"fold": fold, "model": "linear_ridge", "linear_alpha": linear_alpha, **lr_metrics})
-        if args.save_predictions:
-            rw_q10, rw_q90 = _gaussian_q10_q90(pred_rw, train_resid_std_rw)
-            lr_q10, lr_q90 = _gaussian_q10_q90(pred_lr, train_resid_std_lr)
-            _append_prediction_records(
-                prediction_rows,
-                quantile_rows,
-                timestamps=ts_test,
-                y_true=y_test,
-                y_pred=pred_rw,
-                q10=rw_q10,
-                q50=pred_rw,
-                q90=rw_q90,
-                fold=fold,
-                model="random_walk",
-                mode=mode_name,
-                asset=asset_label,
-            )
-            _append_prediction_records(
-                prediction_rows,
-                quantile_rows,
-                timestamps=ts_test,
-                y_true=y_test,
-                y_pred=pred_lr,
-                q10=lr_q10,
-                q50=pred_lr,
-                q90=lr_q90,
-                fold=fold,
-                model="linear_ridge",
-                mode=mode_name,
-                asset=asset_label,
-            )
+        if use_linear_ridge:
+            lr = LinearLagBaseline(alpha=linear_alpha).fit(X_train, y_train)
+            pred_lr = lr.predict(X_test)
+            train_resid_std_lr = float(np.std(y_train - lr.predict(X_train), ddof=1)) if len(y_train) > 1 else 1e-6
+            lr_metrics = evaluate_model(y_test, pred_lr, train_resid_std_lr, n_trials=n_trials)
+            all_rows.append({"fold": fold, "model": "linear_ridge", "linear_alpha": linear_alpha, **lr_metrics})
+            all_preds_linear.extend(pred_lr.tolist())
+            if args.save_predictions:
+                lr_q10, lr_q90 = _gaussian_q10_q90(pred_lr, train_resid_std_lr)
+                _append_prediction_records(
+                    prediction_rows,
+                    quantile_rows,
+                    timestamps=ts_test,
+                    y_true=y_test,
+                    y_pred=pred_lr,
+                    q10=lr_q10,
+                    q50=pred_lr,
+                    q90=lr_q90,
+                    fold=fold,
+                    model="linear_ridge",
+                    mode=mode_name,
+                    asset=asset_label,
+                )
 
         if use_xgboost:
             xgb = XGBoostLagBaseline(random_state=42 + fold).fit(X_train, y_train)
@@ -408,7 +461,7 @@ def _run_single(args, use_sentiment: bool, output_path: Path) -> None:
                     asset=asset_label,
                 )
 
-        arima_pred = None if args.no_arima else try_arima_forecast(train_y=y_train, test_y=y_test, order=(1, 0, 1))
+        arima_pred = None if not use_arima else try_arima_forecast(train_y=y_train, test_y=y_test, order=(1, 0, 1))
         if arima_pred is not None:
             arima_std = float(np.std(y_train, ddof=1)) if len(y_train) > 1 else 1e-6
             arima_metrics = evaluate_model(y_test, arima_pred, arima_std, n_trials=n_trials)
@@ -430,8 +483,6 @@ def _run_single(args, use_sentiment: bool, output_path: Path) -> None:
                     asset=asset_label,
                 )
 
-        all_preds_linear.extend(pred_lr.tolist())
-        all_preds_rw.extend(pred_rw.tolist())
         all_y_true.extend(y_test.tolist())
 
     results = pd.DataFrame(all_rows)
@@ -444,13 +495,14 @@ def _run_single(args, use_sentiment: bool, output_path: Path) -> None:
     summary.columns = ["_".join(col).strip("_") for col in summary.columns]
     summary = summary.reset_index()
 
-    y_true_arr = np.asarray(all_y_true, dtype=float)
-    dm = diebold_mariano_test(y_true_arr, np.asarray(all_preds_linear), np.asarray(all_preds_rw), power=2, horizon=args.horizon)
     summary["dm_vs_rw_stat"] = np.nan
     summary["dm_vs_rw_pvalue"] = np.nan
-    summary.loc[summary["model"] == "linear_ridge", "dm_vs_rw_stat"] = dm["dm_stat"]
-    summary.loc[summary["model"] == "linear_ridge", "dm_vs_rw_pvalue"] = dm["p_value"]
-    if use_xgboost and all_preds_xgb:
+    y_true_arr = np.asarray(all_y_true, dtype=float)
+    if use_random_walk and use_linear_ridge and all_preds_rw and all_preds_linear:
+        dm = diebold_mariano_test(y_true_arr, np.asarray(all_preds_linear), np.asarray(all_preds_rw), power=2, horizon=args.horizon)
+        summary.loc[summary["model"] == "linear_ridge", "dm_vs_rw_stat"] = dm["dm_stat"]
+        summary.loc[summary["model"] == "linear_ridge", "dm_vs_rw_pvalue"] = dm["p_value"]
+    if use_xgboost and use_random_walk and all_preds_xgb and all_preds_rw:
         dm_xgb = diebold_mariano_test(
             y_true_arr,
             np.asarray(all_preds_xgb),
@@ -532,6 +584,7 @@ def _run_single(args, use_sentiment: bool, output_path: Path) -> None:
         "cv_splits": args.cv_splits,
         "cv_embargo": args.cv_embargo,
         "cv_label_horizon": args.cv_label_horizon,
+        "baseline_models": requested_models,
         "asset": asset_label,
         "mode": mode_name,
         "predictions_path": str(predictions_path) if predictions_path else None,

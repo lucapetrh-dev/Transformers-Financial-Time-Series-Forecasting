@@ -21,7 +21,7 @@ from forecast.pipeline.paper_validity import (
 
 EXPECTED_ASSETS = {"btc", "eth", "ada", "doge", "xmr", "xrp"}
 ALLOWED_MODELS = {
-    "baselines": {"linear_ridge", "random_walk"},
+    "baselines": {"linear_ridge", "random_walk", "zero_forecast", "xgboost", "arima_101"},
     "transformers": {"patchtst_like", "itransformer_like", "random_walk_sequence"},
     "chronos2_zero_shot": {"chronos2_zero_shot", "random_walk_scaled"},
     "foundation": {

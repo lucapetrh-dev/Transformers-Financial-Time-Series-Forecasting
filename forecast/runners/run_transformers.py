@@ -240,7 +240,7 @@ def main() -> None:
     parser.add_argument("--min-train-size", type=int, default=365)
     parser.add_argument("--test-size", type=int, default=30)
     parser.add_argument("--step-size", type=int, default=30)
-    parser.add_argument("--epochs", type=int, default=8)
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--models", type=str, default="dlinear_like,tcn_like,patchtst_like,itransformer_like")

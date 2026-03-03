@@ -1,66 +1,48 @@
-# Results Summary
+# Final Results Summary
 
-Generated: 2026-03-02 (strict hardening state, native multi-foundation rerun completed).
-
-This folder tracks active, reproducible, six-asset paper outputs under strict validation gates.
+Generated: 2026-03-03 (strict local rerun, native multi-foundation included).
 
 ## Canonical Scope
 
 - Assets: `btc, eth, ada, doge, xmr, xrp`
-- Target space: `log_return`
-- Horizon: `h=1`
-- AAVE-era and temporary outputs were removed.
-- Active paper families:
-`linear_ridge/random_walk`,
-`patchtst_like/itransformer_like/random_walk_sequence`,
-`chronos2_zero_shot/moirai_zero_shot/lagllama_zero_shot/random_walk_scaled`.
+- Target: one-day `log_return` (`h=1`)
+- Active families (point track): baselines, compact transformers, native foundation models (`chronos2_zero_shot`, `timesfm_zero_shot`, `moirai_zero_shot`, `lagllama_zero_shot`, `random_walk_scaled`)
 
-## Canonical Files
+## Key Benchmark Outcomes (No Sentiment, Point Track)
 
-- Main paper summary: `results/paper/PAPER_H1_RESULTS_SUMMARY.md`
-- Best-by-asset table: `results/paper/PAPER_H1_best_by_asset.csv`
-- Family performance table: `results/paper/PAPER_H1_family_performance.csv`
-- Sentiment delta table: `results/paper/PAPER_H1_sentiment_delta.csv`
-- Ablation winners: `results/paper/PAPER_H1_ablation_mode_wins.csv`
+- Family-level averages (`results/paper/PAPER_H1_family_performance.csv`):
+`zero_forecast` MAE `0.03098` (lowest reference), `timesfm_zero_shot` MAE `0.03170` (strongest foundation), `linear_ridge` MAE `0.03310`.
+- Best-by-asset rows (`results/paper/PAPER_H1_best_by_asset_mode.csv`):
+ADA `timesfm_zero_shot`; BTC `zero_forecast`; DOGE `zero_forecast`; ETH `zero_forecast`; XMR `timesfm_zero_shot`; XRP `timesfm_zero_shot`.
+- Sentiment deltas (`results/paper/PAPER_H1_sentiment_delta.csv`, family means):
+baselines `+0.00679` MAE, transformers `+0.00963` MAE (degradation in both).
 
-## Core Benchmark Inputs
+## Inference and Reproducibility Status
 
-- Baselines: `results/paper/multi_asset_baselines_h1_paired_summary.csv`
-- Transformers: `results/paper/multi_asset_transformers_h1_paired_summary.csv`
-- Foundation (unified): `results/paper/multi_asset_foundation_h1_summary.csv`
-- Chronos-2 compatibility wrapper output: `results/paper/multi_asset_chronos2_h1_summary.csv`
-- Feature ablation best: `results/paper/feature_ablation_h1_summary_best.csv`
-
-## Strict Policy
-
-- Paper summary generation runs in strict mode by default and fails on:
-`missing objective_track`, missing/empty inference tables, fallback rows, and asset-universe mismatch.
-- Reproducibility audit strict mode validates metadata path integrity and rejects deprecated `truth_*` references.
-- Detailed traces are archived under `results/paper/_archive_detailed/<timestamp>/` via:
-`forecast/runners/run_artifact_policy.py`.
-
-## Current Validation Status
-
-- Inference tables are present and non-empty:
+- Inference outputs present and non-empty:
 `results/paper/PAPER_H1_metric_ci95.csv`,
 `results/paper/PAPER_H1_directional_binomial.csv`,
 `results/paper/PAPER_H1_mcs.csv`.
 - Inference row counts:
-`metric_ci95=120`, `directional_binomial=120`, `mcs=120`.
-- MCS now reports overlap-aware comparison scopes (`comparison_scope`) when model timestamp panels are disconnected.
-- Strict paper summary generation passes:
-`python forecast/runners/run_paper_summary.py --results-root results/paper --horizon 1 --output-prefix PAPER_H1 --strict`
-- Strict reproducibility audit passes with `paper_strict_pass: true`:
-`results/paper/reproducibility/reproducibility_summary.json`.
-- Canonical summary cardinalities:
-`baselines=24 rows`, `transformers=72 rows`, `foundation=36 rows`, `chronos2=12 rows`, `ablations=36 rows`, each on exactly six assets.
-- Note: TimesFM is excluded from the active paper benchmark.
+`metric_ci95=150`, `directional_binomial=150`, `mcs=150`.
+- Directional sample sizes:
+baseline/foundation rows use `n_obs=660`; transformer sequence rows use `n_obs=600`.
+- Strict paper summary passes:
+`python forecast/runners/run_paper_summary.py --strict`
+- Strict reproducibility audit passes:
+`results/paper/reproducibility/reproducibility_summary.json` has `paper_strict_pass: true`.
+- Transformer history file exists:
+`results/paper/multi_asset_transformers_h1_paired_summary_history.csv` (`max_epoch=20`).
 
-## Deterministic Runbook
+## Manuscript Status
 
-- Full strict local orchestration entrypoint:
-`python forecast/runners/run_precolab_paper_pipeline.py --horizon 1 --assets btc,eth,ada,doge,xmr,xrp`
-- Archive policy applied after rerun:
-`results/paper/_archive_detailed/20260302_precolab_hardening/`
-- Native multi-foundation detailed traces archive:
-`results/paper/_archive_detailed/20260302_post_native_foundation/`
+- Updated thesis source:
+`results/paper/overleaf_thesis/main.tex`
+- Mirrored upload source:
+`results/paper/overleaf_upload/main.tex`
+- Current local compile:
+`results/paper/overleaf_thesis/main.pdf` is `30` pages.
+
+## Still Missing / Open Items
+
+- None blocking for the manuscript target: page cap (<=30) and LaTeX warning cleanup are both satisfied in the local build.

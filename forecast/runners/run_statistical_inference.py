@@ -10,7 +10,7 @@ import pandas as pd
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from forecast.pipeline.metrics import backtest_metrics, deflated_sharpe_ratio, strategy_returns
+from forecast.pipeline.metrics import backtest_metrics, deflated_sharpe_ratio, directional_accuracy, strategy_returns
 from forecast.pipeline.statistical_inference import (
     exact_binomial_directional_test,
     model_confidence_set,
@@ -59,7 +59,7 @@ def _bootstrap_metrics(
     metric_fns = {
         "mae": lambda yt, yp: float(np.mean(np.abs(yt - yp))),
         "rmse": lambda yt, yp: float(np.sqrt(np.mean((yt - yp) ** 2))),
-        "directional_accuracy": lambda yt, yp: float(np.mean(np.sign(yt) == np.sign(yp))),
+        "directional_accuracy": lambda yt, yp: float(directional_accuracy(yt, yp)),
         "sharpe_5bps": lambda yt, yp: float(backtest_metrics(yt, yp, cost_bps=5.0)["sharpe"]),
         "dsr": lambda yt, yp: float(deflated_sharpe_ratio(strategy_returns(yt, yp, cost_bps=5.0)[0], n_trials=1)),
     }
