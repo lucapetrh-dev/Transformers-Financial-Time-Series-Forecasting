@@ -6,7 +6,7 @@ Generated: 2026-03-03 (strict local rerun, native multi-foundation included).
 
 - Assets: `btc, eth, ada, doge, xmr, xrp`
 - Target: one-day `log_return` (`h=1`)
-- Active families (point track): baselines, compact transformers, native foundation models (`chronos2_zero_shot`, `timesfm_zero_shot`, `moirai_zero_shot`, `lagllama_zero_shot`, `random_walk_scaled`)
+- Active families (point track): baselines, compact transformers, native foundation models (`chronos2_zero_shot`, `timesfm_zero_shot`, `moirai_zero_shot`, `random_walk_scaled`)
 
 ## Key Benchmark Outcomes (No Sentiment, Point Track)
 

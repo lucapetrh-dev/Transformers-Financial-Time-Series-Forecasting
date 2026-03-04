@@ -34,13 +34,6 @@ FOUNDATION_REGISTRY: dict[str, FoundationSpec] = {
         backend_status="native",
         backend_note="Moirai adapter using uni2ts package",
     ),
-    "lagllama": FoundationSpec(
-        key="lagllama",
-        model_name="lagllama_zero_shot",
-        default_model_id="time-series-foundation-models/Lag-Llama",
-        backend_status="native",
-        backend_note="Lag-Llama adapter using lag_llama package",
-    ),
 }
 
 

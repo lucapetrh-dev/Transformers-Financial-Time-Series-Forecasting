@@ -33,11 +33,10 @@ Install optional packages used by some runners:
 pip install statsmodels xgboost chronos-forecasting
 ```
 
-Install native multi-foundation backends (TimesFM, Moirai, Lag-Llama):
+Install native multi-foundation backends (TimesFM, Moirai):
 
 ```bash
 pip install "timesfm[torch]" uni2ts gluonts lightning
-pip install "git+https://github.com/time-series-foundation-models/lag-llama.git"
 pip install "huggingface_hub<1.0"
 ```
 
@@ -128,7 +127,7 @@ python forecast/runners/run_multi_asset_transformers.py \
   --output results/paper/multi_asset_transformers_h1_paired_summary.csv
 ```
 
-### 3) Multi-foundation zero-shot (Chronos-2, TimesFM, Moirai, Lag-Llama)
+### 3) Multi-foundation zero-shot (Chronos-2, TimesFM, Moirai)
 
 ```bash
 python forecast/runners/run_multi_asset_foundation.py \
@@ -139,7 +138,7 @@ python forecast/runners/run_multi_asset_foundation.py \
   --min-train-size 300 \
   --test-size 60 \
   --step-size 120 \
-  --models chronos2,timesfm,moirai,lagllama \
+  --models chronos2,timesfm,moirai \
   --paper-strict \
   --auto-adjust-splits \
   --save-predictions \

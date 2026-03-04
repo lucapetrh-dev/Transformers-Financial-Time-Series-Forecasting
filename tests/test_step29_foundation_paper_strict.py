@@ -54,7 +54,6 @@ def test_foundation_native_adapter_paths_are_available() -> None:
         "chronos2": "chronos2_zero_shot",
         "timesfm": "timesfm_zero_shot",
         "moirai": "moirai_zero_shot",
-        "lagllama": "lagllama_zero_shot",
     }
     for key, model_name in expected.items():
         adapter = build_foundation_adapter(model_key=key)

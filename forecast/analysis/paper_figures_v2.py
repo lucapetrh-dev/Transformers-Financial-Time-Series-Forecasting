@@ -152,16 +152,42 @@ def _choose_best_model(
 ) -> str:
     sub = summary_df[(summary_df["asset"] == asset) & (summary_df["mode"] == mode)]
     if "objective_track" in sub.columns:
-        sub = sub[sub["objective_track"] == objective_track]
+        sub = sub[sub["objective_track"].fillna("point") == objective_track]
     if sub.empty:
         raise ValueError(f"No rows for asset={asset}, mode={mode}")
     return str(sub.sort_values("mae_mean", ascending=True).iloc[0]["model"])
 
 
+def _choose_best_available_model(
+    summary_df: pd.DataFrame,
+    predictions_df: pd.DataFrame,
+    asset: str,
+    mode: str = "no_sentiment",
+    objective_track: str = "point",
+) -> str:
+    sub = summary_df[(summary_df["asset"] == asset) & (summary_df["mode"] == mode)].copy()
+    if "objective_track" in sub.columns:
+        sub = sub[sub["objective_track"].fillna("point") == objective_track]
+    if sub.empty:
+        raise ValueError(f"No rows for asset={asset}, mode={mode}")
+
+    pred = predictions_df[(predictions_df["asset"] == asset) & (predictions_df["mode"] == mode)].copy()
+    if "objective_track" in pred.columns:
+        pred = pred[pred["objective_track"].fillna("point") == objective_track]
+    available_models = set(pred["model"].astype(str).unique().tolist())
+
+    ranked = sub.sort_values("mae_mean", ascending=True)
+    for row in ranked.itertuples(index=False):
+        model = str(getattr(row, "model"))
+        if model in available_models:
+            return model
+    return str(ranked.iloc[0]["model"])
+
+
 def _prediction_trace(
     pred_all: pd.DataFrame,
     asset: str,
-    models: list[str],
+    models: list[tuple[str, str]],
     out_path: Path,
     title: str,
     records: list[FigureRecord],
@@ -170,7 +196,7 @@ def _prediction_trace(
 ) -> None:
     df = pred_all[(pred_all["asset"] == asset) & (pred_all["mode"] == "no_sentiment")].copy()
     if "objective_track" in df.columns:
-        df = df[df["objective_track"] == "point"]
+        df = df[df["objective_track"].fillna("point") == "point"]
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
 
@@ -179,22 +205,39 @@ def _prediction_trace(
 
     truth = (
         df[["timestamp", "y_true"]]
-        .drop_duplicates(subset=["timestamp"], keep="last")
+        .groupby("timestamp", as_index=False)["y_true"]
+        .mean()
         .sort_values("timestamp")
         .tail(tail_n)
     )
+    if truth.empty:
+        return
+    full_idx = pd.date_range(truth["timestamp"].min(), truth["timestamp"].max(), freq="D")
+    truth = truth.set_index("timestamp").reindex(full_idx).rename_axis("timestamp").reset_index()
     ax.plot(truth["timestamp"], truth["y_true"], color="black", linewidth=1.8, label="y_true")
 
-    for model in models:
+    role_colors = {
+        "baseline": "#2563EB",
+        "transformer": "#F97316",
+        "foundation": "#059669",
+    }
+    for role, model in models:
         sub = (
             df[df["model"] == model][["timestamp", "y_pred"]]
-            .drop_duplicates(subset=["timestamp"], keep="last")
+            .groupby("timestamp", as_index=False)["y_pred"]
+            .mean()
             .sort_values("timestamp")
-            .tail(tail_n)
         )
         if sub.empty:
             continue
-        ax.plot(sub["timestamp"], sub["y_pred"], linewidth=1.3, label=model, color=_family_color(model))
+        sub = sub.set_index("timestamp").reindex(full_idx).rename_axis("timestamp").reset_index()
+        ax.plot(
+            sub["timestamp"],
+            sub["y_pred"],
+            linewidth=1.4,
+            label=f"{role}: {model}",
+            color=role_colors.get(role, _family_color(model)),
+        )
 
     ax.set_title(title)
     ax.set_xlabel("Time")
@@ -226,6 +269,7 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
     data_manifest = _load_csv(root / "data_manifest.csv")
     base_summary = _load_csv(root / "multi_asset_baselines_h1_paired_summary.csv")
     trf_summary = _load_csv(root / "multi_asset_transformers_h1_paired_summary.csv")
+    benchmark_assets = sorted(base_summary["asset"].dropna().astype(str).unique().tolist())
     foundation_summary_path = root / "multi_asset_foundation_h1_summary.csv"
     if foundation_summary_path.exists():
         chrn_summary = _load_csv(foundation_summary_path)
@@ -252,11 +296,23 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
     base_pred = _load_csv(root / "multi_asset_baselines_h1_paired_summary_predictions.csv")
     trf_pred = _load_csv(root / "multi_asset_transformers_h1_paired_summary_predictions.csv")
     chrn_pred = _load_csv(root / f"{foundation_prefix}_predictions.csv")
+    if "objective_track" not in base_pred.columns:
+        base_pred["objective_track"] = "point"
+    if "objective_track" not in trf_pred.columns:
+        trf_pred["objective_track"] = "point"
+    if "objective_track" not in chrn_pred.columns:
+        chrn_pred["objective_track"] = "point"
     pred_all = pd.concat([base_pred, trf_pred, chrn_pred], ignore_index=True)
 
     base_quant = _load_csv(root / "multi_asset_baselines_h1_paired_summary_quantiles.csv")
     trf_quant = _load_csv(root / "multi_asset_transformers_h1_paired_summary_quantiles.csv")
     chrn_quant = _load_csv(root / f"{foundation_prefix}_quantiles.csv")
+    if "objective_track" not in base_quant.columns:
+        base_quant["objective_track"] = "point"
+    if "objective_track" not in trf_quant.columns:
+        trf_quant["objective_track"] = "point"
+    if "objective_track" not in chrn_quant.columns:
+        chrn_quant["objective_track"] = "point"
     quant_all = pd.concat([base_quant, trf_quant, chrn_quant], ignore_index=True)
 
     trf_history = _load_csv(root / "multi_asset_transformers_h1_paired_summary_history.csv")
@@ -482,23 +538,35 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
         "conceptual_protocol",
     )
 
-    # FIG 08: stationarity test heatmap
+    # FIG 08: stationarity test heatmap on -log10(p)
     st = stationarity_tests.copy()
     st = st[st["series"] == "return_1d"].copy()
     st["asset"] = st["asset"].str.upper()
     pivot = st.pivot_table(index="asset", columns="test", values="p_value", aggfunc="mean").sort_index()
+    pivot = pivot.reindex(columns=["adf", "kpss"])
     fig, ax = plt.subplots(figsize=(7.2, 4.4))
-    im = ax.imshow(pivot.to_numpy(dtype=float), cmap="viridis", aspect="auto")
+    pv = np.clip(pivot.to_numpy(dtype=float), 1e-30, 1.0)
+    z = -np.log10(pv)
+    im = ax.imshow(z, cmap="viridis", aspect="auto")
     ax.set_xticks(np.arange(len(pivot.columns)))
     ax.set_xticklabels(pivot.columns)
     ax.set_yticks(np.arange(len(pivot.index)))
     ax.set_yticklabels(pivot.index)
-    ax.set_title("ADF/KPSS p-values on Daily Returns")
+    ax.set_title("ADF/KPSS Significance on Daily Returns (-log10 p-value)")
     for i in range(pivot.shape[0]):
         for j in range(pivot.shape[1]):
             val = pivot.iloc[i, j]
-            ax.text(j, i, f"{val:.3f}" if pd.notna(val) else "-", ha="center", va="center", color="white", fontsize=8)
-    plt.colorbar(im, ax=ax, fraction=0.045, pad=0.04)
+            if not pd.notna(val):
+                txt = "-"
+            elif val < 1e-16:
+                txt = "<1e-16"
+            elif val >= 0.0999:
+                txt = ">=1e-1"
+            else:
+                txt = f"{val:.1e}"
+            ax.text(j, i, txt, ha="center", va="center", color="white", fontsize=8)
+    cbar = plt.colorbar(im, ax=ax, fraction=0.045, pad=0.04)
+    cbar.set_label("-log10(p-value)")
     _save_and_record(
         records,
         fig,
@@ -659,13 +727,13 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
     )
 
     # FIG 22-24: prediction traces for BTC/ETH/XMR
-    b_best = _choose_best_model(base_summary, "btc")
-    t_best = _choose_best_model(trf_summary, "btc")
-    f_best = _choose_best_model(chrn_summary, "btc")
+    b_best = _choose_best_available_model(base_summary, pred_all, "btc")
+    t_best = _choose_best_available_model(trf_summary, pred_all, "btc")
+    f_best = _choose_best_available_model(chrn_summary, pred_all, "btc")
     _prediction_trace(
         pred_all,
         "btc",
-        [b_best, t_best, f_best],
+        [("baseline", b_best), ("transformer", t_best), ("foundation", f_best)],
         out_dir / "fig_v2_22_trace_btc.png",
         "BTC Return Forecast Trace (Best Baseline vs Best Transformer vs Best Foundation)",
         records,
@@ -673,13 +741,13 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
         foundation_predictions_source,
     )
 
-    b_best = _choose_best_model(base_summary, "eth")
-    t_best = _choose_best_model(trf_summary, "eth")
-    f_best = _choose_best_model(chrn_summary, "eth")
+    b_best = _choose_best_available_model(base_summary, pred_all, "eth")
+    t_best = _choose_best_available_model(trf_summary, pred_all, "eth")
+    f_best = _choose_best_available_model(chrn_summary, pred_all, "eth")
     _prediction_trace(
         pred_all,
         "eth",
-        [b_best, t_best, f_best],
+        [("baseline", b_best), ("transformer", t_best), ("foundation", f_best)],
         out_dir / "fig_v2_23_trace_eth.png",
         "ETH Return Forecast Trace (Best Baseline vs Best Transformer vs Best Foundation)",
         records,
@@ -687,13 +755,13 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
         foundation_predictions_source,
     )
 
-    b_best = _choose_best_model(base_summary, "xmr")
-    t_best = _choose_best_model(trf_summary, "xmr")
-    f_best = _choose_best_model(chrn_summary, "xmr")
+    b_best = _choose_best_available_model(base_summary, pred_all, "xmr")
+    t_best = _choose_best_available_model(trf_summary, pred_all, "xmr")
+    f_best = _choose_best_available_model(chrn_summary, pred_all, "xmr")
     _prediction_trace(
         pred_all,
         "xmr",
-        [b_best, t_best, f_best],
+        [("baseline", b_best), ("transformer", t_best), ("foundation", f_best)],
         out_dir / "fig_v2_24_trace_xmr.png",
         "XMR Return Forecast Trace (Best Baseline vs Best Transformer vs Best Foundation)",
         records,
@@ -705,7 +773,7 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
     resid_df = pred_all[pred_all["mode"] == "no_sentiment"].copy()
     f_best_df = chrn_summary[chrn_summary["mode"] == "no_sentiment"].copy()
     if "objective_track" in f_best_df.columns:
-        f_best_df = f_best_df[f_best_df["objective_track"] == "point"]
+        f_best_df = f_best_df[f_best_df["objective_track"].fillna("point") == "point"]
     foundation_best_global = f_best_df.sort_values("mae_mean", ascending=True).iloc[0]["model"]
     keep_models = ["linear_ridge", "dlinear_like", str(foundation_best_global)]
     resid_df = resid_df[resid_df["model"].isin(keep_models)].copy()
@@ -937,7 +1005,7 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
         if "mode" in sub.columns:
             sub = sub[sub["mode"] == "no_sentiment"]
         if "objective_track" in sub.columns:
-            sub = sub[sub["objective_track"] == "point"]
+            sub = sub[sub["objective_track"].fillna("point") == "point"]
         for row in sub.itertuples(index=False):
             dm_rows.append(
                 {
@@ -979,7 +1047,7 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
         if "mode" in sub.columns:
             sub = sub[sub["mode"] == "no_sentiment"]
         if "objective_track" in sub.columns:
-            sub = sub[sub["objective_track"] == "point"]
+            sub = sub[sub["objective_track"].fillna("point") == "point"]
         rr = (
             sub.groupby("model", as_index=False)
             .agg(
@@ -1084,6 +1152,300 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
         "How do transfer variants track short-term ETH return movements in practice?",
         "transfer_btc_eth_patchtst_no_sent_predictions.csv;transfer_btc_eth_patchtst_with_sent_predictions.csv",
     )
+
+    sent_diag_root = root / "sentiment_diagnostics"
+    trf_diag_root = root / "transformer_diagnostics"
+
+    # FIG 37: sentiment correlation heatmap by lag
+    corr_path = sent_diag_root / "sentiment_correlation_by_lag.csv"
+    if corr_path.exists():
+        corr = pd.read_csv(corr_path)
+        if "asset" in corr.columns:
+            corr = corr[corr["asset"].astype(str).isin(benchmark_assets)].copy()
+        if not corr.empty and {"feature", "lag", "pearson_r"}.issubset(corr.columns):
+            heat = (
+                corr.groupby(["feature", "lag"], as_index=False)["pearson_r"]
+                .mean()
+                .pivot(index="feature", columns="lag", values="pearson_r")
+                .sort_index()
+            )
+            if not heat.empty:
+                top_features = heat.abs().max(axis=1).sort_values(ascending=False).head(30).index
+                heat = heat.loc[top_features]
+                vmax = float(np.nanmax(np.abs(heat.to_numpy(dtype=float)))) if np.isfinite(heat.to_numpy(dtype=float)).any() else 0.1
+                vmax = max(vmax, 0.05)
+                fig, ax = plt.subplots(figsize=(9.5, 8.0))
+                im = ax.imshow(heat.to_numpy(dtype=float), cmap="coolwarm", aspect="auto", vmin=-vmax, vmax=vmax)
+                ax.set_xticks(np.arange(len(heat.columns)))
+                ax.set_xticklabels([str(c) for c in heat.columns])
+                ax.set_yticks(np.arange(len(heat.index)))
+                ax.set_yticklabels(heat.index, fontsize=7)
+                ax.set_xlabel("Lag")
+                ax.set_title("Sentiment-Target Correlation Heatmap by Lag")
+                plt.colorbar(im, ax=ax, fraction=0.035, pad=0.02)
+                _save_and_record(
+                    records,
+                    fig,
+                    out_dir / "fig_v2_37_sentiment_corr_heatmap_by_lag.png",
+                    "fig_v2_37",
+                    "Sentiment-target correlation heatmap by lag",
+                    "5.2 Financial + Sentiment Analysis",
+                    "Are sentiment features near-zero correlated with target returns across lags?",
+                    "sentiment_diagnostics/sentiment_correlation_by_lag.csv",
+                )
+
+    # FIG 38: dimensionality profile bar chart
+    dim_path = sent_diag_root / "dimensionality_profile.csv"
+    if dim_path.exists():
+        dim = pd.read_csv(dim_path)
+        if "asset" in dim.columns:
+            dim = dim[dim["asset"].astype(str).isin(benchmark_assets)].copy()
+        if not dim.empty and {"mode", "n_features", "p_over_n"}.issubset(dim.columns):
+            d = dim.groupby("mode", as_index=False).agg(n_features=("n_features", "mean"), p_over_n=("p_over_n", "mean"))
+            d = d.sort_values("n_features", ascending=True)
+            fig, ax1 = plt.subplots(figsize=(10.0, 4.5))
+            x = np.arange(len(d))
+            ax1.bar(x, d["n_features"], color="#0F766E")
+            ax1.set_xticks(x)
+            ax1.set_xticklabels(d["mode"], rotation=20, ha="right")
+            ax1.set_ylabel("Number of features")
+            ax1.grid(axis="y", alpha=0.2)
+            ax2 = ax1.twinx()
+            ax2.plot(x, d["p_over_n"], color="#DC2626", marker="o", linewidth=2.0)
+            ax2.set_ylabel("p / n")
+            ax1.set_title("Feature Dimensionality Profile and p/n Ratios")
+            _save_and_record(
+                records,
+                fig,
+                out_dir / "fig_v2_38_dimensionality_profile.png",
+                "fig_v2_38",
+                "Dimensionality profile and p/n ratios by feature mode",
+                "5.2 Financial + Sentiment Analysis",
+                "How does sentiment expansion change p/n ratios versus financial-only mode?",
+                "sentiment_diagnostics/dimensionality_profile.csv",
+            )
+
+    # FIG 39: PCA sentiment ablation line plot
+    pca_path = sent_diag_root / "pca_sentiment_ablation.csv"
+    if pca_path.exists():
+        pca_df = pd.read_csv(pca_path)
+        if "asset" in pca_df.columns:
+            pca_df = pca_df[pca_df["asset"].astype(str).isin(benchmark_assets)].copy()
+        if not pca_df.empty and {"mode", "n_pca_components", "mae"}.issubset(pca_df.columns):
+            fig, ax = plt.subplots(figsize=(9.2, 4.8))
+            pca_mode = pca_df[pca_df["mode"] == "sentiment_pca"].copy()
+            if not pca_mode.empty:
+                agg = (
+                    pca_mode.groupby("n_pca_components")["mae"]
+                    .agg(
+                        median_mae="median",
+                        q25=lambda s: float(np.quantile(s, 0.25)),
+                        q75=lambda s: float(np.quantile(s, 0.75)),
+                    )
+                    .reset_index()
+                    .sort_values("n_pca_components")
+                )
+                ax.plot(agg["n_pca_components"], agg["median_mae"], marker="o", linewidth=2, color="#1D4ED8", label="PCA sentiment (median)")
+                ax.fill_between(agg["n_pca_components"], agg["q25"], agg["q75"], color="#1D4ED8", alpha=0.15, label="PCA sentiment IQR")
+            x_min = float(pca_mode["n_pca_components"].min()) if not pca_mode.empty else 0.0
+            x_max = float(pca_mode["n_pca_components"].max()) if not pca_mode.empty else 1.0
+            for mode_name, color in [("no_sentiment", "#059669"), ("full_sentiment", "#DC2626")]:
+                sub = pca_df[pca_df["mode"] == mode_name]
+                if not sub.empty:
+                    q25 = float(sub["mae"].quantile(0.25))
+                    q50 = float(sub["mae"].quantile(0.50))
+                    q75 = float(sub["mae"].quantile(0.75))
+                    ax.axhline(q50, color=color, linestyle="--", linewidth=1.6, label=f"{mode_name} (median)")
+                    ax.fill_between([x_min, x_max], q25, q75, color=color, alpha=0.08)
+            ax.set_xlabel("Sentiment PCA components")
+            ax.set_ylabel("MAE")
+            ax.set_title("Sentiment PCA Ablation (Ridge, Asset-Median with IQR)")
+            ax.grid(alpha=0.2)
+            ax.legend()
+            _save_and_record(
+                records,
+                fig,
+                out_dir / "fig_v2_39_pca_sentiment_ablation.png",
+                "fig_v2_39",
+                "PCA compression ablation for sentiment block",
+                "5.2 Financial + Sentiment Analysis",
+                "Does compressing sentiment dimensions recover forecast quality?",
+                "sentiment_diagnostics/pca_sentiment_ablation.csv",
+            )
+
+    # FIG 40: residual ACF panel
+    residual_path = trf_diag_root / "residual_acf_analysis.csv"
+    if residual_path.exists():
+        resid = pd.read_csv(residual_path)
+        if "asset" in resid.columns:
+            resid = resid[resid["asset"].astype(str).isin(benchmark_assets)].copy()
+        if not resid.empty and {"mode", "lag", "acf"}.issubset(resid.columns):
+            resid = resid[resid["lag"] > 0].copy()
+            if not resid.empty:
+                fig, axes = plt.subplots(1, 2, figsize=(13.0, 4.8), sharex=True)
+                for mode in sorted(resid["mode"].dropna().unique().tolist()):
+                    sub = resid[resid["mode"] == mode]
+                    line = (
+                        sub.groupby("lag")["acf"]
+                        .agg(
+                            median_acf="median",
+                            q25=lambda s: float(np.quantile(s, 0.25)),
+                            q75=lambda s: float(np.quantile(s, 0.75)),
+                        )
+                        .reset_index()
+                        .sort_values("lag")
+                    )
+                    axes[0].plot(line["lag"], line["median_acf"], marker="o", linewidth=1.6, label=str(mode))
+                    axes[0].fill_between(line["lag"], line["q25"], line["q75"], alpha=0.15)
+
+                    if {"acf_ci_upper", "acf_ci_lower"}.issubset(sub.columns):
+                        signif = (
+                            sub.assign(signif=((sub["acf_ci_lower"] > 0.0) | (sub["acf_ci_upper"] < 0.0)).astype(float))
+                            .groupby("lag", as_index=False)["signif"]
+                            .mean()
+                            .sort_values("lag")
+                        )
+                        axes[1].plot(signif["lag"], signif["signif"], marker="o", linewidth=1.6, label=str(mode))
+
+                axes[0].axhline(0.0, color="black", linewidth=1)
+                axes[0].set_xlabel("Lag")
+                axes[0].set_ylabel("Residual ACF")
+                axes[0].set_title("Residual ACF (Median with IQR)")
+                axes[0].grid(alpha=0.2)
+                axes[0].legend()
+
+                axes[1].set_xlabel("Lag")
+                axes[1].set_ylabel("Share Significant")
+                axes[1].set_ylim(-0.02, 1.02)
+                axes[1].set_title("Share of Significant Residual ACF")
+                axes[1].grid(alpha=0.2)
+                axes[1].legend()
+                _save_and_record(
+                    records,
+                    fig,
+                    out_dir / "fig_v2_40_residual_acf_panel.png",
+                    "fig_v2_40",
+                    "Residual autocorrelation panel for transformer predictions",
+                    "5.2 Financial + Sentiment Analysis",
+                    "Do transformer residuals show meaningful leftover serial structure?",
+                    "transformer_diagnostics/residual_acf_analysis.csv",
+                )
+
+    # FIG 41: return predictability panel
+    return_path = trf_diag_root / "return_predictability.csv"
+    if return_path.exists():
+        rp = pd.read_csv(return_path)
+        if "asset" in rp.columns:
+            rp = rp[rp["asset"].astype(str).isin(benchmark_assets)].copy()
+        if not rp.empty and {"lag", "acf", "vr_q2", "vr_q5", "vr_q10", "vr_q20"}.issubset(rp.columns):
+            acf_agg = (
+                rp.groupby("lag")["acf"]
+                .agg(
+                    mean_acf="mean",
+                    q25=lambda s: float(np.quantile(s, 0.25)),
+                    q75=lambda s: float(np.quantile(s, 0.75)),
+                )
+                .reset_index()
+                .sort_values("lag")
+            )
+            vr_asset = rp.groupby("asset", as_index=False)[["vr_q2", "vr_q5", "vr_q10", "vr_q20"]].first()
+            vr_long = vr_asset.melt(id_vars=["asset"], var_name="vr_q", value_name="vr")
+            vr_long["vr_q"] = pd.Categorical(vr_long["vr_q"], categories=["vr_q2", "vr_q5", "vr_q10", "vr_q20"], ordered=True)
+            fig, axes = plt.subplots(1, 2, figsize=(12.5, 4.5))
+            axes[0].plot(acf_agg["lag"], acf_agg["mean_acf"], marker="o", linewidth=1.7, color="#0EA5A4", label="mean")
+            axes[0].fill_between(acf_agg["lag"], acf_agg["q25"], acf_agg["q75"], color="#0EA5A4", alpha=0.15, label="asset IQR")
+            axes[0].axhline(0.0, color="black", linewidth=1)
+            axes[0].set_title("Average Return ACF")
+            axes[0].set_xlabel("Lag")
+            axes[0].set_ylabel("ACF")
+            axes[0].grid(alpha=0.2)
+            axes[0].legend()
+
+            q_labels = ["vr_q2", "vr_q5", "vr_q10", "vr_q20"]
+            vals = [vr_long.loc[vr_long["vr_q"] == q, "vr"].to_numpy(dtype=float) for q in q_labels]
+            axes[1].boxplot(vals, labels=["VR(2)", "VR(5)", "VR(10)", "VR(20)"], showmeans=True)
+            axes[1].axhline(1.0, color="#DC2626", linestyle="--", linewidth=1.4)
+            axes[1].set_title("Variance-Ratio Diagnostics")
+            axes[1].set_ylabel("Variance ratio")
+            axes[1].grid(axis="y", alpha=0.2)
+            _save_and_record(
+                records,
+                fig,
+                out_dir / "fig_v2_41_return_predictability_panel.png",
+                "fig_v2_41",
+                "Return predictability diagnostics (ACF and variance ratios)",
+                "5.2 Financial + Sentiment Analysis",
+                "Do raw returns contain exploitable serial structure at short lags?",
+                "transformer_diagnostics/return_predictability.csv",
+            )
+
+    # FIG 42: training convergence curves
+    if not trf_history.empty and {"epoch", "train_loss", "val_loss", "mode"}.issubset(trf_history.columns):
+        fig, axes = plt.subplots(1, 2, figsize=(12.5, 4.6), sharey=True)
+        for ax, mode in zip(axes, ["no_sentiment", "with_sentiment"]):
+            sub = trf_history[trf_history["mode"] == mode].copy()
+            if sub.empty:
+                continue
+            curve = sub.groupby("epoch", as_index=False).agg(train_loss=("train_loss", "median"), val_loss=("val_loss", "median"))
+            ax.plot(curve["epoch"], curve["train_loss"], marker="o", linewidth=1.6, color="#2563EB", label="train")
+            ax.plot(curve["epoch"], curve["val_loss"], marker="o", linewidth=1.6, color="#DC2626", label="val")
+            ax.set_title(f"Median Loss Curves ({mode})")
+            ax.set_xlabel("Epoch")
+            ax.grid(alpha=0.2)
+        axes[0].set_ylabel("Loss")
+        axes[0].legend()
+        _save_and_record(
+            records,
+            fig,
+            out_dir / "fig_v2_42_training_convergence_curves.png",
+            "fig_v2_42",
+            "Median train/validation convergence curves by sentiment mode",
+            "5.2 Financial + Sentiment Analysis",
+            "Do optimization traces suggest undertraining or stable convergence behavior?",
+            "multi_asset_transformers_h1_paired_summary_history.csv",
+        )
+
+    # FIG 43: bidirectional transfer comparison
+    bidir_path = root / "transfer_bidirectional_comparison.csv"
+    if bidir_path.exists():
+        bidir = pd.read_csv(bidir_path)
+        if not bidir.empty and {"direction", "sentiment_mode", "mode", "mae"}.issubset(bidir.columns):
+            fig, axes = plt.subplots(1, 2, figsize=(13.0, 4.8), sharey=True)
+            mode_order = ["source_zero_shot", "source_finetuned", "target_only", "random_walk_sequence"]
+            for ax, sent_mode, color in [
+                (axes[0], "no_sentiment", "#2563EB"),
+                (axes[1], "with_sentiment", "#DC2626"),
+            ]:
+                sub = bidir[bidir["sentiment_mode"] == sent_mode].copy()
+                if sub.empty:
+                    continue
+                direction_order = sorted(sub["direction"].unique().tolist())
+                width = 0.38
+                x = np.arange(len(mode_order), dtype=float)
+                pivot = (
+                    sub.pivot_table(index="mode", columns="direction", values="mae", aggfunc="mean")
+                    .reindex(mode_order)
+                )
+                for idx, direction in enumerate(direction_order):
+                    vals = pivot[direction].to_numpy(dtype=float) if direction in pivot.columns else np.full(len(mode_order), np.nan)
+                    offset = (idx - (len(direction_order) - 1) / 2.0) * width
+                    ax.bar(x + offset, vals, width=width, label=direction, alpha=0.9)
+                ax.set_title(f"Transfer MAE ({sent_mode})")
+                ax.set_xticks(x)
+                ax.set_xticklabels(mode_order, rotation=20, ha="right")
+                ax.grid(alpha=0.2)
+            axes[0].set_ylabel("MAE")
+            axes[0].legend(fontsize=8)
+            _save_and_record(
+                records,
+                fig,
+                out_dir / "fig_v2_43_bidirectional_transfer_comparison.png",
+                "fig_v2_43",
+                "Bidirectional transfer comparison (BTC↔ETH)",
+                "5.3 Transfer Learning Analysis",
+                "How symmetric are transfer outcomes across BTC→ETH and ETH→BTC directions?",
+                "transfer_bidirectional_comparison.csv",
+            )
 
     _records_to_csv(records, out_dir / "FIGURES_MANIFEST_V2.csv")
     return records

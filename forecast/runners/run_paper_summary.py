@@ -28,7 +28,6 @@ ALLOWED_MODELS = {
         "chronos2_zero_shot",
         "timesfm_zero_shot",
         "moirai_zero_shot",
-        "lagllama_zero_shot",
         "random_walk_scaled",
     },
 }

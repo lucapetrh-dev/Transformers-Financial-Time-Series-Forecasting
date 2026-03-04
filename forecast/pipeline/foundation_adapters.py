@@ -239,103 +239,6 @@ class MoiraiNativeAdapter:
         return out
 
 
-class LagLlamaNativeAdapter:
-    model_name = "lagllama_zero_shot"
-    backend_status = "native"
-
-    def __init__(self, *, model_id: str, batch_size: int, context_length: int, num_samples: int = 100) -> None:
-        self.model_id = model_id
-        self.batch_size = int(batch_size)
-        self.context_length = int(context_length)
-        self.num_samples = int(num_samples)
-        self.backend_note = "Lag-Llama adapter using lag_llama package"
-        self._predictors: dict[int, object] = {}
-        self._ckpt_path: str | None = None
-        self._hparams: dict[str, object] | None = None
-
-    def _load_ckpt(self) -> tuple[str, dict[str, object]]:
-        if self._ckpt_path is not None and self._hparams is not None:
-            return self._ckpt_path, self._hparams
-
-        import torch
-        from huggingface_hub import hf_hub_download
-
-        ckpt_path = hf_hub_download(repo_id=self.model_id, filename="lag-llama.ckpt")
-        ckpt_payload = torch.load(ckpt_path, map_location="cpu")
-        hparams = dict(ckpt_payload.get("hyper_parameters", {}))
-        self._ckpt_path = ckpt_path
-        self._hparams = hparams
-        return ckpt_path, hparams
-
-    def _get_predictor(self, horizon: int):
-        if horizon in self._predictors:
-            return self._predictors[horizon]
-
-        import torch
-        from lag_llama.gluon.estimator import LagLlamaEstimator
-
-        ckpt_path, hparams = self._load_ckpt()
-        model_kwargs = dict(hparams.get("model_kwargs", {}))
-        est = LagLlamaEstimator(
-            prediction_length=int(horizon),
-            context_length=max(16, min(self.context_length, int(model_kwargs.get("max_context_length", 2048)))),
-            input_size=int(model_kwargs.get("input_size", 1)),
-            n_layer=int(model_kwargs.get("n_layer", 8)),
-            n_embd_per_head=int(model_kwargs.get("n_embd_per_head", 16)),
-            n_head=int(model_kwargs.get("n_head", 9)),
-            scaling=str(model_kwargs.get("scaling", "robust")),
-            time_feat=bool(model_kwargs.get("time_feat", True)),
-            dropout=float(model_kwargs.get("dropout", 0.0)),
-            batch_size=max(1, self.batch_size),
-            num_parallel_samples=max(32, self.num_samples),
-            ckpt_path=ckpt_path,
-            device=torch.device("cpu"),
-        )
-        module = est.create_lightning_module()
-        transformation = est.create_transformation()
-        predictor = est.create_predictor(transformation, module)
-        self._predictors[horizon] = predictor
-        return predictor
-
-    def predict_batch(self, contexts: list[np.ndarray], *, horizon: int) -> list[FoundationPrediction]:
-        if not contexts:
-            return []
-        from gluonts.dataset.common import ListDataset
-        import pandas as pd
-
-        predictor = self._get_predictor(horizon)
-        ds_rows = []
-        for ctx in contexts:
-            ds_rows.append(
-                {
-                    "start": pd.Period("2000-01-01", freq="D"),
-                    "target": np.asarray(ctx, dtype=float),
-                }
-            )
-        ds = ListDataset(ds_rows, freq="D")
-        forecasts = list(predictor.predict(ds))
-        out: list[FoundationPrediction] = []
-        for ctx, fcst in zip(contexts, forecasts):
-            last_obs = float(ctx[-1])
-            samples = np.asarray(fcst.samples)
-            if samples.ndim == 3:
-                samples_1 = samples[:, horizon - 1, 0]
-            elif samples.ndim == 2:
-                samples_1 = samples[:, horizon - 1]
-            else:
-                samples_1 = samples.reshape(-1)
-            q10_abs, q50_abs, q90_abs = _safe_quantiles_from_samples(samples_1)
-            out.append(
-                FoundationPrediction(
-                    point=q50_abs - last_obs,
-                    q10=q10_abs - last_obs,
-                    q50=q50_abs - last_obs,
-                    q90=q90_abs - last_obs,
-                )
-            )
-        return out
-
-
 class PersistenceFallbackAdapter:
     def __init__(self, spec: FoundationSpec, *, model_id: str) -> None:
         self.spec = spec
@@ -371,7 +274,4 @@ def build_foundation_adapter(
         return TimesFMNativeAdapter(model_id=resolved_model_id, batch_size=batch_size, context_length=context_length)
     if spec.key == "moirai":
         return MoiraiNativeAdapter(model_id=resolved_model_id, batch_size=batch_size, context_length=context_length)
-    if spec.key == "lagllama":
-        return LagLlamaNativeAdapter(model_id=resolved_model_id, batch_size=batch_size, context_length=context_length)
     return PersistenceFallbackAdapter(spec, model_id=resolved_model_id)
-
