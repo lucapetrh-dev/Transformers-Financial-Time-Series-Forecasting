@@ -31,6 +31,13 @@ ALLOWED_MODELS = {
         "random_walk_scaled",
     },
 }
+DEFAULT_WINNER_POLICY = "composite_rank"
+DEFAULT_WINNER_EXCLUDE_MODELS = ["zero_forecast"]
+DEFAULT_WINNER_METRICS = ["mae_mean", "rmse_mean", "directional_accuracy_mean", "sharpe_5bps_mean"]
+DEFAULT_WINNER_TIEBREAK = "mae_mean"
+LOWER_IS_BETTER_METRICS = {"mae_mean", "rmse_mean"}
+HIGHER_IS_BETTER_METRICS = {"directional_accuracy_mean", "sharpe_5bps_mean"}
+
 
 def _load_required(path: Path, label: str) -> pd.DataFrame:
     if not path.exists():
@@ -49,21 +56,143 @@ def _safe_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     return df[keep].copy()
 
 
-def _best_by_asset(df: pd.DataFrame) -> pd.DataFrame:
-    out = (
-        df.sort_values(["asset", "mae_mean"], ascending=[True, True])
-        .groupby("asset", as_index=False)
-        .head(1)
-        .reset_index(drop=True)
-    )
-    return out
+def _split_csv_arg(raw: str | None) -> list[str]:
+    if raw is None:
+        return []
+    return [p.strip() for p in str(raw).split(",") if p.strip()]
 
 
-def _best_by_asset_mode(df: pd.DataFrame) -> pd.DataFrame:
+def _selection_score_table(
+    df: pd.DataFrame,
+    *,
+    winner_metrics: list[str],
+) -> pd.Series:
+    metrics = [m for m in winner_metrics if m in df.columns and (m in LOWER_IS_BETTER_METRICS or m in HIGHER_IS_BETTER_METRICS)]
+    if not metrics:
+        return pd.Series(np.nan, index=df.index, dtype=float)
+
+    n = len(df)
+    if n <= 1:
+        return pd.Series(1.0, index=df.index, dtype=float)
+
+    aligned_scores: list[pd.Series] = []
+    for metric in metrics:
+        metric_vals = pd.to_numeric(df[metric], errors="coerce")
+        if metric_vals.notna().sum() == 0:
+            continue
+
+        if metric in LOWER_IS_BETTER_METRICS:
+            rank = metric_vals.rank(method="average", ascending=True, na_option="bottom")
+        else:
+            rank = metric_vals.rank(method="average", ascending=False, na_option="bottom")
+
+        score = 1.0 - (rank - 1.0) / max(n - 1, 1)
+        aligned_scores.append(score.fillna(0.0))
+
+    if not aligned_scores:
+        return pd.Series(np.nan, index=df.index, dtype=float)
+    score_df = pd.concat(aligned_scores, axis=1)
+    return score_df.mean(axis=1)
+
+
+def _select_group_winner(
+    group_df: pd.DataFrame,
+    *,
+    winner_policy: str,
+    winner_exclude_models: set[str],
+    winner_metrics: list[str],
+    winner_tiebreak: str,
+) -> pd.Series:
+    excluded = sorted(m for m in winner_exclude_models if m)
+    excluded_str = ",".join(excluded)
+
+    if "model" in group_df.columns and excluded:
+        candidates = group_df[~group_df["model"].astype(str).isin(excluded)].copy()
+    else:
+        candidates = group_df.copy()
+    if candidates.empty:
+        candidates = group_df.copy()
+
+    if winner_policy == "composite_rank":
+        selection_score = _selection_score_table(candidates, winner_metrics=winner_metrics)
+        candidates = candidates.assign(selection_score=selection_score)
+        score_col = "selection_score"
+        score_ascending = False
+    else:
+        score_col = winner_tiebreak if winner_tiebreak in candidates.columns else "mae_mean"
+        candidates = candidates.assign(selection_score=pd.to_numeric(candidates[score_col], errors="coerce"))
+        score_ascending = score_col in LOWER_IS_BETTER_METRICS
+
+    sort_cols: list[str] = [score_col]
+    sort_ascending: list[bool] = [score_ascending]
+    if "mae_mean" in candidates.columns and "mae_mean" not in sort_cols:
+        sort_cols.append("mae_mean")
+        sort_ascending.append(True)
+    if "directional_accuracy_mean" in candidates.columns and "directional_accuracy_mean" not in sort_cols:
+        sort_cols.append("directional_accuracy_mean")
+        sort_ascending.append(False)
+    if "model" in candidates.columns:
+        sort_cols.append("model")
+        sort_ascending.append(True)
+
+    ranked = candidates.sort_values(sort_cols, ascending=sort_ascending, na_position="last")
+    winner = ranked.iloc[0].copy()
+    winner["selection_policy"] = winner_policy
+    winner["selection_score"] = float(winner.get("selection_score", np.nan)) if pd.notna(winner.get("selection_score", np.nan)) else np.nan
+    winner["selection_excluded_models"] = excluded_str
+    return winner
+
+
+def _best_by_asset(
+    df: pd.DataFrame,
+    *,
+    winner_policy: str,
+    winner_exclude_models: set[str],
+    winner_metrics: list[str],
+    winner_tiebreak: str,
+) -> pd.DataFrame:
+    group_cols = ["asset"]
+    rows = [
+        _select_group_winner(
+            group,
+            winner_policy=winner_policy,
+            winner_exclude_models=winner_exclude_models,
+            winner_metrics=winner_metrics,
+            winner_tiebreak=winner_tiebreak,
+        )
+        for _, group in df.groupby(group_cols, dropna=False)
+    ]
+    if not rows:
+        return pd.DataFrame(columns=df.columns)
+    out = pd.DataFrame(rows).reset_index(drop=True)
+    sort_cols = [c for c in ["asset", "mode", "objective_track", "family", "model"] if c in out.columns]
+    return out.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
+
+
+def _best_by_asset_mode(
+    df: pd.DataFrame,
+    *,
+    winner_policy: str,
+    winner_exclude_models: set[str],
+    winner_metrics: list[str],
+    winner_tiebreak: str,
+) -> pd.DataFrame:
     group_cols = ["asset", "mode"] + (["objective_track"] if "objective_track" in df.columns else [])
-    sort_cols = [*group_cols, "mae_mean"]
-    out = df.sort_values(sort_cols, ascending=[True] * len(sort_cols)).groupby(group_cols, as_index=False).head(1).reset_index(drop=True)
-    return out
+    rows = [
+        _select_group_winner(
+            group,
+            winner_policy=winner_policy,
+            winner_exclude_models=winner_exclude_models,
+            winner_metrics=winner_metrics,
+            winner_tiebreak=winner_tiebreak,
+        )
+        for _, group in df.groupby(group_cols, dropna=False)
+    ]
+    if not rows:
+        return pd.DataFrame(columns=df.columns)
+    out = pd.DataFrame(rows).reset_index(drop=True)
+    sort_cols = [c for c in ["asset", "mode", "objective_track", "family", "model"] if c in out.columns]
+    return out.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
 
 
 def _sentiment_delta(df: pd.DataFrame, family: str) -> pd.DataFrame:
@@ -89,6 +218,53 @@ def _sentiment_delta(df: pd.DataFrame, family: str) -> pd.DataFrame:
         if no_col in out.columns and ws_col in out.columns:
             out[f"delta_{metric}_with_minus_no"] = out[ws_col] - out[no_col]
     return out
+
+
+def _naive_reference_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if "model" not in df.columns:
+        return pd.DataFrame(columns=df.columns)
+    naive_models = {"zero_forecast", "random_walk", "random_walk_sequence", "random_walk_scaled"}
+    out = df[df["model"].astype(str).isin(naive_models)].copy()
+    sort_cols = [c for c in ["asset", "mode", "objective_track", "family", "model"] if c in out.columns]
+    return out.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
+
+
+def _skill_vs_zero(point_models: pd.DataFrame) -> pd.DataFrame:
+    if point_models.empty or "model" not in point_models.columns:
+        return pd.DataFrame()
+
+    key_cols = [c for c in ["asset", "mode", "objective_track"] if c in point_models.columns]
+    if not key_cols:
+        return pd.DataFrame()
+
+    zero = point_models[point_models["model"].astype(str) == "zero_forecast"].copy()
+    if zero.empty:
+        return pd.DataFrame()
+
+    zero = (
+        zero.sort_values(key_cols + ["mae_mean"], ascending=[True] * len(key_cols) + [True])
+        .groupby(key_cols, as_index=False)
+        .head(1)
+        .reset_index(drop=True)
+    )
+    zero = zero[key_cols + ["mae_mean", "rmse_mean", "directional_accuracy_mean"]].rename(
+        columns={
+            "mae_mean": "mae_zero",
+            "rmse_mean": "rmse_zero",
+            "directional_accuracy_mean": "directional_accuracy_zero",
+        }
+    )
+
+    merged = point_models.merge(zero, on=key_cols, how="left")
+    out = merged[pd.notna(merged["mae_zero"])].copy()
+    if out.empty:
+        return out
+
+    out["skill_mae_vs_zero"] = 1.0 - (out["mae_mean"] / out["mae_zero"].replace(0.0, np.nan))
+    out["skill_rmse_vs_zero"] = 1.0 - (out["rmse_mean"] / out["rmse_zero"].replace(0.0, np.nan))
+    out["delta_directional_accuracy_vs_zero"] = out["directional_accuracy_mean"] - out["directional_accuracy_zero"]
+    sort_cols = [c for c in ["asset", "mode", "objective_track", "family", "model"] if c in out.columns]
+    return out.sort_values(sort_cols, ascending=[True] * len(sort_cols)).reset_index(drop=True)
 
 
 def _fmt(v: float | int | str | None) -> str:
@@ -193,11 +369,19 @@ def main() -> None:
     parser.add_argument("--output-prefix", type=str, default="PAPER_H1")
     parser.add_argument("--strict", dest="strict", action="store_true", default=True)
     parser.add_argument("--no-strict", dest="strict", action="store_false")
+    parser.add_argument("--winner-policy", type=str, choices=["mae", "composite_rank"], default=DEFAULT_WINNER_POLICY)
+    parser.add_argument("--winner-exclude-models", type=str, default=",".join(DEFAULT_WINNER_EXCLUDE_MODELS))
+    parser.add_argument("--winner-metrics", type=str, default=",".join(DEFAULT_WINNER_METRICS))
+    parser.add_argument("--winner-tiebreak", type=str, default=DEFAULT_WINNER_TIEBREAK)
     args = parser.parse_args()
 
     root = Path(args.results_root)
     h = args.horizon
     prefix = args.output_prefix
+    winner_policy = args.winner_policy
+    winner_exclude_models = set(_split_csv_arg(args.winner_exclude_models))
+    winner_metrics = _split_csv_arg(args.winner_metrics) or list(DEFAULT_WINNER_METRICS)
+    winner_tiebreak = args.winner_tiebreak.strip() or DEFAULT_WINNER_TIEBREAK
 
     baselines_path = root / f"multi_asset_baselines_h{h}_paired_summary.csv"
     transformers_path = root / f"multi_asset_transformers_h{h}_paired_summary.csv"
@@ -269,8 +453,22 @@ def main() -> None:
     if point_models.empty:
         point_models = all_models.copy()
 
-    best_asset_mode = _best_by_asset_mode(point_models)
-    best_asset_overall = _best_by_asset(point_models)
+    best_asset_mode = _best_by_asset_mode(
+        point_models,
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_exclude_models,
+        winner_metrics=winner_metrics,
+        winner_tiebreak=winner_tiebreak,
+    )
+    best_asset_overall = _best_by_asset(
+        point_models,
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_exclude_models,
+        winner_metrics=winner_metrics,
+        winner_tiebreak=winner_tiebreak,
+    )
+    naive_reference = _naive_reference_rows(point_models)
+    skill_vs_zero = _skill_vs_zero(point_models)
 
     sentiment_delta = pd.concat(
         [_sentiment_delta(base, "baselines"), _sentiment_delta(trf, "transformers")],
@@ -312,6 +510,8 @@ def main() -> None:
     out_sentiment = root / f"{prefix}_sentiment_delta.csv"
     out_family = root / f"{prefix}_family_performance.csv"
     out_ablation = root / f"{prefix}_ablation_mode_wins.csv"
+    out_naive = root / f"{prefix}_naive_reference.csv"
+    out_skill = root / f"{prefix}_skill_vs_zero.csv"
     out_md = root / f"{prefix}_RESULTS_SUMMARY.md"
     out_ci = root / f"{prefix}_metric_ci95.csv"
     out_binom = root / f"{prefix}_directional_binomial.csv"
@@ -322,6 +522,8 @@ def main() -> None:
     sentiment_delta.to_csv(out_sentiment, index=False)
     family_perf.to_csv(out_family, index=False)
     ablation_mode_wins.to_csv(out_ablation, index=False)
+    naive_reference.to_csv(out_naive, index=False)
+    skill_vs_zero.to_csv(out_skill, index=False)
     if not ci_df.empty:
         ci_df.to_csv(out_ci, index=False)
     if not binom_df.empty:
@@ -339,6 +541,10 @@ def main() -> None:
     lines.append(f"- Total evaluated rows: `{len(all_models)}`")
     lines.append(f"- Point-track rows: `{len(point_models)}`")
     lines.append(f"- Sentiment delta rows: `{len(sentiment_delta)}`")
+    lines.append(f"- Winner policy: `{winner_policy}`")
+    lines.append(f"- Winner excluded models: `{','.join(sorted(winner_exclude_models)) if winner_exclude_models else '-'}`")
+    lines.append(f"- Winner metrics: `{','.join(winner_metrics)}`")
+    lines.append(f"- Winner tie-break: `{winner_tiebreak}`")
     lines.append("")
     lines.append("## Best Model Per Asset (Point Track)")
     lines.append("")
@@ -350,6 +556,8 @@ def main() -> None:
                 "family",
                 "mode",
                 "model",
+                "selection_policy",
+                "selection_score",
                 "mae_mean",
                 "mae_ci95_low",
                 "mae_ci95_high",
@@ -357,6 +565,41 @@ def main() -> None:
                 "directional_accuracy_mean",
                 "sharpe_5bps_mean",
                 "dsr_mean",
+            ],
+        )
+    )
+    lines.append("")
+    lines.append("## Naive Reference Rows")
+    lines.append("")
+    lines.append(
+        _table_md(
+            naive_reference,
+            [
+                "asset",
+                "family",
+                "mode",
+                "model",
+                "mae_mean",
+                "rmse_mean",
+                "directional_accuracy_mean",
+                "sharpe_5bps_mean",
+            ],
+        )
+    )
+    lines.append("")
+    lines.append("## Skill vs Zero-Forecast")
+    lines.append("")
+    lines.append(
+        _table_md(
+            skill_vs_zero,
+            [
+                "asset",
+                "family",
+                "mode",
+                "model",
+                "skill_mae_vs_zero",
+                "skill_rmse_vs_zero",
+                "delta_directional_accuracy_vs_zero",
             ],
         )
     )
@@ -427,6 +670,8 @@ def main() -> None:
     lines.append(f"- `{out_sentiment}`")
     lines.append(f"- `{out_family}`")
     lines.append(f"- `{out_ablation}`")
+    lines.append(f"- `{out_naive}`")
+    lines.append(f"- `{out_skill}`")
     if not ci_df.empty:
         lines.append(f"- `{out_ci}`")
     if not binom_df.empty:
@@ -442,6 +687,8 @@ def main() -> None:
     print(f"Saved: {out_sentiment}")
     print(f"Saved: {out_family}")
     print(f"Saved: {out_ablation}")
+    print(f"Saved: {out_naive}")
+    print(f"Saved: {out_skill}")
     if not ci_df.empty:
         print(f"Saved: {out_ci}")
     if not binom_df.empty:

@@ -48,6 +48,8 @@ def test_paper_summary_generator_real_data_outputs(tmp_path: Path) -> None:
         root / f"{out_prefix}_sentiment_delta.csv",
         root / f"{out_prefix}_family_performance.csv",
         root / f"{out_prefix}_ablation_mode_wins.csv",
+        root / f"{out_prefix}_naive_reference.csv",
+        root / f"{out_prefix}_skill_vs_zero.csv",
         root / f"{out_prefix}_metric_ci95.csv",
         root / f"{out_prefix}_directional_binomial.csv",
         root / f"{out_prefix}_mcs.csv",
@@ -64,3 +66,6 @@ def test_paper_summary_generator_real_data_outputs(tmp_path: Path) -> None:
     assert not ci_df.empty
     assert best_df["asset"].nunique() >= 2
     assert {"mae_ci95_low", "mae_ci95_high"}.issubset(best_df.columns)
+    assert {"selection_policy", "selection_score", "selection_excluded_models"}.issubset(best_df.columns)
+    assert "zero_forecast" not in set(best_df["model"].astype(str).tolist())
+    assert "zero_forecast" in set(family_df["model"].astype(str).tolist())

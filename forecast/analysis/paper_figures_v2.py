@@ -117,6 +117,12 @@ def _family_color(model_name: str) -> str:
     return "#7C3AED"
 
 
+DEFAULT_FIGURE_WINNER_POLICY = "composite_rank"
+DEFAULT_FIGURE_WINNER_METRICS = ["mae_mean", "rmse_mean", "directional_accuracy_mean", "sharpe_5bps_mean"]
+LOWER_IS_BETTER_METRICS = {"mae_mean", "rmse_mean"}
+HIGHER_IS_BETTER_METRICS = {"directional_accuracy_mean", "sharpe_5bps_mean"}
+
+
 def _load_stationarity_tables(root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     st_root = root / "appendix" / "stationarity"
     summary_paths = sorted(st_root.glob("*_stationarity_summary.csv"))
@@ -149,13 +155,70 @@ def _choose_best_model(
     asset: str,
     mode: str = "no_sentiment",
     objective_track: str = "point",
+    winner_policy: str = DEFAULT_FIGURE_WINNER_POLICY,
+    winner_exclude_models: set[str] | None = None,
+    winner_metrics: list[str] | None = None,
 ) -> str:
-    sub = summary_df[(summary_df["asset"] == asset) & (summary_df["mode"] == mode)]
+    sub = summary_df[(summary_df["asset"] == asset) & (summary_df["mode"] == mode)].copy()
     if "objective_track" in sub.columns:
         sub = sub[sub["objective_track"].fillna("point") == objective_track]
     if sub.empty:
         raise ValueError(f"No rows for asset={asset}, mode={mode}")
-    return str(sub.sort_values("mae_mean", ascending=True).iloc[0]["model"])
+    ranked = _rank_for_winner_policy(
+        sub,
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_exclude_models or set(),
+        winner_metrics=winner_metrics or list(DEFAULT_FIGURE_WINNER_METRICS),
+    )
+    return str(ranked.iloc[0]["model"])
+
+
+def _rank_for_winner_policy(
+    df: pd.DataFrame,
+    *,
+    winner_policy: str,
+    winner_exclude_models: set[str],
+    winner_metrics: list[str],
+) -> pd.DataFrame:
+    candidates = df.copy()
+    if "model" in candidates.columns and winner_exclude_models:
+        filtered = candidates[~candidates["model"].astype(str).isin(winner_exclude_models)].copy()
+        if not filtered.empty:
+            candidates = filtered
+
+    if winner_policy == "composite_rank":
+        n = len(candidates)
+        if n <= 1:
+            candidates["selection_score"] = 1.0
+        else:
+            aligned_scores: list[pd.Series] = []
+            for metric in winner_metrics:
+                if metric not in candidates.columns:
+                    continue
+                if metric not in LOWER_IS_BETTER_METRICS and metric not in HIGHER_IS_BETTER_METRICS:
+                    continue
+                vals = pd.to_numeric(candidates[metric], errors="coerce")
+                if vals.notna().sum() == 0:
+                    continue
+                if metric in LOWER_IS_BETTER_METRICS:
+                    rank = vals.rank(method="average", ascending=True, na_option="bottom")
+                else:
+                    rank = vals.rank(method="average", ascending=False, na_option="bottom")
+                aligned_scores.append((1.0 - (rank - 1.0) / max(n - 1, 1)).fillna(0.0))
+            if aligned_scores:
+                candidates["selection_score"] = pd.concat(aligned_scores, axis=1).mean(axis=1)
+            else:
+                candidates["selection_score"] = np.nan
+        sort_cols = ["selection_score", "mae_mean", "directional_accuracy_mean", "model"]
+        sort_asc = [False, True, False, True]
+    else:
+        candidates["selection_score"] = pd.to_numeric(candidates.get("mae_mean", np.nan), errors="coerce")
+        sort_cols = ["mae_mean", "directional_accuracy_mean", "model"]
+        sort_asc = [True, False, True]
+
+    sort_cols = [c for c in sort_cols if c in candidates.columns]
+    sort_asc = sort_asc[: len(sort_cols)]
+    return candidates.sort_values(sort_cols, ascending=sort_asc, na_position="last")
 
 
 def _choose_best_available_model(
@@ -164,6 +227,9 @@ def _choose_best_available_model(
     asset: str,
     mode: str = "no_sentiment",
     objective_track: str = "point",
+    winner_policy: str = DEFAULT_FIGURE_WINNER_POLICY,
+    winner_exclude_models: set[str] | None = None,
+    winner_metrics: list[str] | None = None,
 ) -> str:
     sub = summary_df[(summary_df["asset"] == asset) & (summary_df["mode"] == mode)].copy()
     if "objective_track" in sub.columns:
@@ -176,7 +242,12 @@ def _choose_best_available_model(
         pred = pred[pred["objective_track"].fillna("point") == objective_track]
     available_models = set(pred["model"].astype(str).unique().tolist())
 
-    ranked = sub.sort_values("mae_mean", ascending=True)
+    ranked = _rank_for_winner_policy(
+        sub,
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_exclude_models or set(),
+        winner_metrics=winner_metrics or list(DEFAULT_FIGURE_WINNER_METRICS),
+    )
     for row in ranked.itertuples(index=False):
         model = str(getattr(row, "model"))
         if model in available_models:
@@ -292,6 +363,17 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
     sent_delta = _load_csv(root / "PAPER_H1_sentiment_delta.csv")
     ablation_delta = _load_csv(root / "feature_ablation_h1_summary_mode_deltas.csv")
     ablation_wins = _load_csv(root / "PAPER_H1_ablation_mode_wins.csv")
+    skill_vs_zero_path = root / "PAPER_H1_skill_vs_zero.csv"
+    skill_vs_zero = pd.read_csv(skill_vs_zero_path) if skill_vs_zero_path.exists() else pd.DataFrame()
+
+    winner_policy = DEFAULT_FIGURE_WINNER_POLICY
+    if "selection_policy" in best_by_asset.columns and best_by_asset["selection_policy"].notna().any():
+        winner_policy = str(best_by_asset["selection_policy"].dropna().iloc[0])
+    winner_excluded_models: set[str] = {"zero_forecast"}
+    if "selection_excluded_models" in best_by_asset.columns and best_by_asset["selection_excluded_models"].notna().any():
+        raw = str(best_by_asset["selection_excluded_models"].dropna().iloc[0]).strip()
+        if raw:
+            winner_excluded_models = {p.strip() for p in raw.split(",") if p.strip()}
 
     base_pred = _load_csv(root / "multi_asset_baselines_h1_paired_summary_predictions.csv")
     trf_pred = _load_csv(root / "multi_asset_transformers_h1_paired_summary_predictions.csv")
@@ -727,9 +809,30 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
     )
 
     # FIG 22-24: prediction traces for BTC/ETH/XMR
-    b_best = _choose_best_available_model(base_summary, pred_all, "btc")
-    t_best = _choose_best_available_model(trf_summary, pred_all, "btc")
-    f_best = _choose_best_available_model(chrn_summary, pred_all, "btc")
+    b_best = _choose_best_available_model(
+        base_summary,
+        pred_all,
+        "btc",
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_excluded_models,
+        winner_metrics=DEFAULT_FIGURE_WINNER_METRICS,
+    )
+    t_best = _choose_best_available_model(
+        trf_summary,
+        pred_all,
+        "btc",
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_excluded_models,
+        winner_metrics=DEFAULT_FIGURE_WINNER_METRICS,
+    )
+    f_best = _choose_best_available_model(
+        chrn_summary,
+        pred_all,
+        "btc",
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_excluded_models,
+        winner_metrics=DEFAULT_FIGURE_WINNER_METRICS,
+    )
     _prediction_trace(
         pred_all,
         "btc",
@@ -741,9 +844,30 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
         foundation_predictions_source,
     )
 
-    b_best = _choose_best_available_model(base_summary, pred_all, "eth")
-    t_best = _choose_best_available_model(trf_summary, pred_all, "eth")
-    f_best = _choose_best_available_model(chrn_summary, pred_all, "eth")
+    b_best = _choose_best_available_model(
+        base_summary,
+        pred_all,
+        "eth",
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_excluded_models,
+        winner_metrics=DEFAULT_FIGURE_WINNER_METRICS,
+    )
+    t_best = _choose_best_available_model(
+        trf_summary,
+        pred_all,
+        "eth",
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_excluded_models,
+        winner_metrics=DEFAULT_FIGURE_WINNER_METRICS,
+    )
+    f_best = _choose_best_available_model(
+        chrn_summary,
+        pred_all,
+        "eth",
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_excluded_models,
+        winner_metrics=DEFAULT_FIGURE_WINNER_METRICS,
+    )
     _prediction_trace(
         pred_all,
         "eth",
@@ -755,9 +879,30 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
         foundation_predictions_source,
     )
 
-    b_best = _choose_best_available_model(base_summary, pred_all, "xmr")
-    t_best = _choose_best_available_model(trf_summary, pred_all, "xmr")
-    f_best = _choose_best_available_model(chrn_summary, pred_all, "xmr")
+    b_best = _choose_best_available_model(
+        base_summary,
+        pred_all,
+        "xmr",
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_excluded_models,
+        winner_metrics=DEFAULT_FIGURE_WINNER_METRICS,
+    )
+    t_best = _choose_best_available_model(
+        trf_summary,
+        pred_all,
+        "xmr",
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_excluded_models,
+        winner_metrics=DEFAULT_FIGURE_WINNER_METRICS,
+    )
+    f_best = _choose_best_available_model(
+        chrn_summary,
+        pred_all,
+        "xmr",
+        winner_policy=winner_policy,
+        winner_exclude_models=winner_excluded_models,
+        winner_metrics=DEFAULT_FIGURE_WINNER_METRICS,
+    )
     _prediction_trace(
         pred_all,
         "xmr",
@@ -843,7 +988,7 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
     bars = ax.bar(bb["asset"], bb["mae_mean"], color=colors)
     for b, m in zip(bars, bb["model"]):
         ax.text(b.get_x() + b.get_width() / 2, b.get_height(), m, ha="center", va="bottom", rotation=90, fontsize=7)
-    ax.set_title("Best Model per Asset (MAE, Unified Target Space)")
+    ax.set_title("Best Model per Asset (Composite Winner Policy)")
     ax.set_ylabel("MAE")
     ax.grid(axis="y", alpha=0.2)
     _save_and_record(
@@ -851,9 +996,9 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
         fig,
         out_dir / "fig_v2_27_best_model_per_asset.png",
         "fig_v2_27",
-        "Best model per asset under comparable MAE scale",
+        "Best model per asset under composite winner policy",
         "5.4 Final Comparative Results",
-        "Which family wins per asset once all metrics are evaluated in the same target space?",
+        "Which family wins per asset under composite ranking while retaining naive models as references?",
         "PAPER_H1_best_by_asset.csv",
     )
 
@@ -1446,6 +1591,50 @@ def generate_paper_figures_v2(results_root: str | Path, output_dir: str | Path) 
                 "How symmetric are transfer outcomes across BTC→ETH and ETH→BTC directions?",
                 "transfer_bidirectional_comparison.csv",
             )
+
+    # FIG 44: skill vs zero forecast
+    if not skill_vs_zero.empty and {"asset", "model", "skill_mae_vs_zero"}.issubset(skill_vs_zero.columns):
+        sv = skill_vs_zero.copy()
+        if "objective_track" in sv.columns:
+            sv = sv[sv["objective_track"].fillna("point") == "point"]
+        if "mode" in sv.columns:
+            sv = sv[sv["mode"].fillna("no_sentiment") == "no_sentiment"]
+        sv = sv[sv["model"].astype(str) != "zero_forecast"].copy()
+        if not sv.empty:
+            pivot = (
+                sv.pivot_table(index="model", columns="asset", values="skill_mae_vs_zero", aggfunc="mean")
+                .sort_index(axis=1)
+            )
+            if not pivot.empty:
+                model_order = pivot.mean(axis=1).sort_values(ascending=False).index.tolist()
+                pivot = pivot.loc[model_order]
+                values = pivot.to_numpy(dtype=float)
+                vmax = float(np.nanmax(np.abs(values))) if np.isfinite(values).any() else 0.1
+                vmax = max(vmax, 0.05)
+                fig, ax = plt.subplots(figsize=(11.0, 6.0))
+                im = ax.imshow(values, cmap="RdYlGn", aspect="auto", vmin=-vmax, vmax=vmax)
+                ax.set_xticks(np.arange(len(pivot.columns)))
+                ax.set_xticklabels([str(c).upper() for c in pivot.columns], rotation=0)
+                ax.set_yticks(np.arange(len(pivot.index)))
+                ax.set_yticklabels(pivot.index, fontsize=8)
+                ax.set_title("Skill vs Zero-Forecast (MAE Improvement Ratio, No Sentiment)")
+                for i in range(pivot.shape[0]):
+                    for j in range(pivot.shape[1]):
+                        v = pivot.iloc[i, j]
+                        txt = "-" if not pd.notna(v) else f"{100.0 * v:+.1f}%"
+                        ax.text(j, i, txt, ha="center", va="center", fontsize=7, color="black")
+                cbar = plt.colorbar(im, ax=ax, fraction=0.035, pad=0.02)
+                cbar.set_label("skill_mae_vs_zero")
+                _save_and_record(
+                    records,
+                    fig,
+                    out_dir / "fig_v2_44_skill_vs_zero.png",
+                    "fig_v2_44",
+                    "Skill relative to zero-forecast baseline (MAE)",
+                    "5.4 Final Comparative Results",
+                    "How much out-of-sample error skill does each model retain versus the naive zero baseline?",
+                    "PAPER_H1_skill_vs_zero.csv",
+                )
 
     _records_to_csv(records, out_dir / "FIGURES_MANIFEST_V2.csv")
     return records

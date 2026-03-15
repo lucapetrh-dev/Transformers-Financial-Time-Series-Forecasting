@@ -47,6 +47,8 @@ ACTIVE_KEEP_FILENAMES = {
     "PAPER_H1_sentiment_delta.csv",
     "PAPER_H1_family_performance.csv",
     "PAPER_H1_ablation_mode_wins.csv",
+    "PAPER_H1_naive_reference.csv",
+    "PAPER_H1_skill_vs_zero.csv",
     "PAPER_H1_metric_ci95.csv",
     "PAPER_H1_directional_binomial.csv",
     "PAPER_H1_mcs.csv",

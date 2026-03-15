@@ -151,4 +151,9 @@ def test_paper_summary_strict_passes_on_valid_inputs(tmp_path: Path) -> None:
     proc = _run_summary(tmp_path)
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "TEST_H1_best_by_asset.csv").exists()
+    assert (tmp_path / "TEST_H1_naive_reference.csv").exists()
+    assert (tmp_path / "TEST_H1_skill_vs_zero.csv").exists()
     assert (tmp_path / "TEST_H1_RESULTS_SUMMARY.md").exists()
+
+    best_df = pd.read_csv(tmp_path / "TEST_H1_best_by_asset.csv")
+    assert {"selection_policy", "selection_score", "selection_excluded_models"}.issubset(best_df.columns)
